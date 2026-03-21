@@ -31,13 +31,15 @@ function clearToken() {
   try { fs.unlinkSync(TOKEN_FILE); } catch {}
 }
 
-// ── On startup: restore token from disk if available ──────────────────────────
+// ── On startup: restore token from env var (prod) or disk (local) ────────────
 try {
-  const saved = fs.readFileSync(TOKEN_FILE, "utf8").trim();
+  const fromEnv  = process.env.KITE_ACCESS_TOKEN?.trim();
+  const fromDisk = (() => { try { return fs.readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } })();
+  const saved    = fromEnv || fromDisk;
   if (saved) {
     accessToken = saved;
     getClient().setAccessToken(saved);
-    console.log("[Auth] Restored access token from disk");
+    console.log("[Auth] Restored access token from", fromEnv ? "env var" : "disk");
   }
 } catch {}
 
