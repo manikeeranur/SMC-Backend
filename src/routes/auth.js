@@ -1,6 +1,6 @@
 const express = require("express");
 const router  = express.Router();
-const { getClient, setAccessToken, getAccessToken, isAuthenticated } = require("../config/kite");
+const { getClient, setAccessToken, getAccessToken, isAuthenticated, clearToken } = require("../config/kite");
 require("dotenv").config();
 
 const FRONTEND = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -49,6 +49,13 @@ router.post("/token", (req, res) => {
 // GET /api/auth/status
 router.get("/status", (req, res) => {
   res.json({ authenticated: isAuthenticated() });
+});
+
+// POST /api/auth/logout  →  clear token and session
+router.post("/logout", (req, res) => {
+  clearToken();
+  console.log("[Auth] Logged out — token cleared");
+  res.json({ success: true, authenticated: false });
 });
 
 module.exports = router;
