@@ -5,6 +5,26 @@ require("dotenv").config();
 
 const FRONTEND = process.env.FRONTEND_URL || "http://localhost:3000";
 
+// Auto-sync token to Render env vars so it survives service restarts
+async function syncTokenToRender(newToken) {
+  const apiKey    = process.env.RENDER_API_KEY;
+  const serviceId = process.env.RENDER_SERVICE_ID;
+  if (!apiKey || !serviceId) return;
+  const url     = `https://api.render.com/v1/services/${serviceId}/env-vars`;
+  const headers = { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" };
+  try {
+    const existing = await fetch(url, { headers }).then(r => r.json());
+    const vars = existing
+      .map(e => ({ key: e.envVar.key, value: e.envVar.value }))
+      .filter(e => e.key !== "KITE_ACCESS_TOKEN");
+    vars.push({ key: "KITE_ACCESS_TOKEN", value: newToken });
+    await fetch(url, { method: "PUT", headers, body: JSON.stringify(vars) });
+    console.log("[Auth] KITE_ACCESS_TOKEN synced to Render env vars");
+  } catch (err) {
+    console.warn("[Auth] Render sync failed (non-critical):", err.message);
+  }
+}
+
 // GET /api/auth/login  →  returns Kite login URL
 router.get("/login", (req, res) => {
   try {
@@ -30,6 +50,7 @@ router.get("/callback", async (req, res) => {
     );
     setAccessToken(session.access_token);
     console.log(`[Auth] Logged in as ${session.user_name} (${session.user_id})`);
+    syncTokenToRender(session.access_token); // fire-and-forget
     // Redirect browser back to frontend with success flag
     res.redirect(`${FRONTEND}/?kite=connected&user=${encodeURIComponent(session.user_name)}`);
   } catch (err) {
