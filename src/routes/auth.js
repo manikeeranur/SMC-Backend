@@ -51,6 +51,13 @@ router.get("/status", (req, res) => {
   res.json({ authenticated: isAuthenticated() });
 });
 
+// GET /api/auth/token-value  →  returns current token (use once to copy into Render env var)
+router.get("/token-value", (req, res) => {
+  const token = getAccessToken();
+  if (!token) return res.status(401).json({ error: "Not authenticated" });
+  res.json({ access_token: token });
+});
+
 // POST /api/auth/logout  →  clear token and session
 router.post("/logout", (req, res) => {
   clearToken();
