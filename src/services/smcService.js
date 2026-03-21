@@ -336,6 +336,13 @@ function updateAlertPnL(alert, currentLtp) {
   return { ...alert, currentPnL: pnl, pnlPct: pct, status, t1Hit, t1HitTime, exitTime, lastLtp: currentLtp };
 }
 
+// ─── IST time helper (Render runs UTC — always use this for IST comparisons) ──
+function toIST(date) {
+  const ms  = (date instanceof Date ? date : new Date(date)).getTime();
+  const ist = new Date(ms + 5.5 * 60 * 60 * 1000);
+  return { h: ist.getUTCHours(), m: ist.getUTCMinutes() };
+}
+
 // ─── Historical / Backtest scan ───────────────────────────────────────────────
 // Walks minute-by-minute through a past day, finds every SMC signal,
 // fetches the matching option candles, then resolves each trade (SL / TARGET / EOD).
@@ -364,8 +371,7 @@ async function runHistoricalSMCScan(date, expiry) {
 
   for (let i = 6; i < niftyCandles.length; i++) {
     const candle = niftyCandles[i];
-    const ct     = new Date(candle.date);
-    const h = ct.getHours(), m = ct.getMinutes();
+    const { h, m } = toIST(candle.date);
     if (h < 9 || (h === 9 && m < 21)) continue;
     if (h >= 15) break; // no new entries at or after 15:00
 
@@ -392,7 +398,7 @@ async function runHistoricalSMCScan(date, expiry) {
 
     signals.push({
       signalTime: candle.date,
-      entryTime:  `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`,
+      entryTime:  `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`, // h,m already IST
       direction:  dir,
       atm,
       spot,
@@ -510,7 +516,7 @@ async function runHistoricalSMCScan(date, expiry) {
     let status = "ACTIVE", exitPrice = entry, exitTime = null, t1Hit = false, t1HitTime = null;
     for (const c of laterCandles) {
       const elapsedMin = (new Date(c.date).getTime() - entryMs) / 60000;
-      const ct = new Date(c.date); const ch = ct.getHours(), cm = ct.getMinutes();
+      const { h: ch, m: cm } = toIST(c.date);
       // Track T1 milestone — record hit time once
       if (!t1Hit && c.high >= rr.target1) {
         t1Hit     = true;
