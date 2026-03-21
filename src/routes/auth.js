@@ -21,7 +21,7 @@ router.get("/login", (req, res) => {
 router.get("/callback", async (req, res) => {
   const { request_token } = req.query;
   if (!request_token) {
-    return res.redirect(`${FRONTEND}/options?kite=error&msg=Missing+request_token`);
+    return res.redirect(`${FRONTEND}/?kite=error&msg=Missing+request_token`);
   }
   try {
     const session = await getClient().generateSession(
@@ -31,10 +31,10 @@ router.get("/callback", async (req, res) => {
     setAccessToken(session.access_token);
     console.log(`[Auth] Logged in as ${session.user_name} (${session.user_id})`);
     // Redirect browser back to frontend with success flag
-    res.redirect(`${FRONTEND}/options?kite=connected&user=${encodeURIComponent(session.user_name)}`);
+    res.redirect(`${FRONTEND}/?kite=connected&user=${encodeURIComponent(session.user_name)}`);
   } catch (err) {
     console.error("[Auth] Callback error:", err.message);
-    res.redirect(`${FRONTEND}/options?kite=error&msg=${encodeURIComponent(err.message)}`);
+    res.redirect(`${FRONTEND}/?kite=error&msg=${encodeURIComponent(err.message)}`);
   }
 });
 
