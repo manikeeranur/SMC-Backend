@@ -390,11 +390,12 @@ async function runHistoricalSMCScan(date, expiry) {
     }
     if (!dir) continue;
 
-    const atm    = getATM(spot);
-    const cdKey  = `${dir}_${atm}`;
+    const atm      = getATM(spot);
+    const cdKey    = `${dir}_${atm}`;
     const lastFire = cooldown.get(cdKey) ?? 0;
-    if (ct.getTime() - lastFire < COOLDOWN_MS) continue;
-    cooldown.set(cdKey, ct.getTime());
+    const candleMs = new Date(candle.date).getTime();
+    if (candleMs - lastFire < COOLDOWN_MS) continue;
+    cooldown.set(cdKey, candleMs);
 
     signals.push({
       signalTime: candle.date,
