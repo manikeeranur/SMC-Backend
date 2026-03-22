@@ -211,6 +211,88 @@ async function sendSessionSummary(todayAlerts) {
   await postChunked(lines);
 }
 
+// ─── Market session notifications ─────────────────────────────────────────────
+function sendSessionOpen() {
+  const date = new Date().toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata",
+  });
+  post([
+    `🔔 <b>LIVE SESSION STARTED</b>`,
+    ``,
+    `📅 Date   : ${date}`,
+    `🕐 Time   : 09:15 IST`,
+    `📡 SMC scanner active from 09:21`,
+    ``,
+    `<i>Market is open. Watching for signals...</i>`,
+  ].join("\n"));
+}
+
+function sendSessionClose() {
+  const date = new Date().toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata",
+  });
+  post([
+    `🔕 <b>LIVE SESSION ENDING</b>`,
+    ``,
+    `📅 Date   : ${date}`,
+    `🕐 Time   : 15:30 IST`,
+    `📡 SMC scanner stopped`,
+    ``,
+    `<i>Market is closing. No new entries will be taken.</i>`,
+  ].join("\n"));
+}
+
+// ─── Auto Trade notifications ─────────────────────────────────────────────────
+function sendAutoTradeStarted() {
+  const time = new Date().toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata" });
+  post([
+    `🟢 <b>AUTO TRADE — STARTED</b>`,
+    ``,
+    `🕐 Time   : ${time} IST`,
+    `📦 Lot    : 1 (65 qty)`,
+    `⚡ Orders : MARKET entry + SL-M stop loss`,
+    ``,
+    `<i>Live SMC alerts will now place real Kite orders.</i>`,
+  ].join("\n"));
+}
+
+function sendAutoTradeStopped() {
+  const time = new Date().toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata" });
+  post([
+    `🔴 <b>AUTO TRADE — STOPPED</b>`,
+    ``,
+    `🕐 Time : ${time} IST`,
+    ``,
+    `<i>No new orders will be placed. Existing Kite orders remain open.</i>`,
+  ].join("\n"));
+}
+
+function sendAutoTradeOrder(pos, type) {
+  // type = "ENTRY" | "EXIT" | "ERROR"
+  const time = new Date().toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata" });
+  const emoji = type === "ENTRY" ? "📥" : type === "EXIT" ? "📤" : "⚠️";
+  const lines = [
+    `${emoji} <b>AUTO TRADE ${type} — ${pos.tradingsymbol}</b>`,
+    ``,
+    `🕐 Time      : ${time} IST`,
+    `📊 Direction : ${pos.direction}`,
+    `💰 Entry     : ₹${pos.rr?.entry?.toFixed(2) ?? "—"}`,
+    `🛑 SL        : ₹${pos.rr?.sl?.toFixed(2) ?? "—"}`,
+    `🎯 Target 1  : ₹${pos.rr?.target1?.toFixed(2) ?? "—"}`,
+    `🎯 Target 2  : ₹${pos.rr?.target2?.toFixed(2) ?? "—"}`,
+  ];
+  if (type === "ENTRY") {
+    lines.push(``, `📋 Entry Order : ${pos.entryOrderId ?? "—"}`);
+    lines.push(`📋 SL Order    : ${pos.slOrderId ?? "—"}`);
+  } else if (type === "EXIT") {
+    lines.push(``, `📋 Exit Order  : ${pos.exitOrderId ?? "—"}`);
+    lines.push(`📊 Status      : ${pos.status}`);
+  } else {
+    lines.push(``, `❌ ${pos.logs?.[pos.logs.length - 1] ?? "Unknown error"}`);
+  }
+  post(lines.join("\n"));
+}
+
 // ─── Startup ping ─────────────────────────────────────────────────────────────
 function sendStartupPing() {
   const now = new Date();
@@ -225,4 +307,4 @@ function sendStartupPing() {
   ].join("\n"));
 }
 
-module.exports = { sendSMCAlert, sendResultAlert, sendBacktestResults, sendSessionSummary, sendStartupPing, isConfigured };
+module.exports = { sendSMCAlert, sendResultAlert, sendBacktestResults, sendSessionSummary, sendStartupPing, sendSessionOpen, sendSessionClose, sendAutoTradeStarted, sendAutoTradeStopped, sendAutoTradeOrder, isConfigured };

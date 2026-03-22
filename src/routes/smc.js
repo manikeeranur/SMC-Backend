@@ -6,6 +6,7 @@ const { runSMCScan, runHistoricalSMCScan, updateAlertPnL } = require("../service
 const { buildOptionChain }           = require("../services/optionChainService");
 const { sendSMCAlert, sendResultAlert, sendBacktestResults } = require("../services/telegramService");
 const { isAuthenticated }            = require("../config/kite");
+const autoTrade                      = require("./autoTrade");
 
 // ─── In-memory store ──────────────────────────────────────────────────────────
 let alerts      = [];          // array of SMC alert objects
@@ -47,9 +48,10 @@ async function refreshActivePnL(expiry) {
 
       const updated = updateAlertPnL(a, newLeg.leg?.ltp ?? newLeg.ltp);
 
-      // Fire Telegram result notification when status changes
+      // Fire Telegram + auto-trade exit when status changes
       if (updated.status !== "ACTIVE" && a.status === "ACTIVE") {
         sendResultAlert(updated);
+        autoTrade.executeExit(updated).catch(() => {});
       }
 
       return { ...updated, leg: { ...a.leg, ltp: newLeg.ltp ?? a.leg.ltp } };
@@ -108,6 +110,9 @@ async function doScan(expiry) {
 
     // 5. Telegram notification
     sendSMCAlert(result);
+
+    // 6. Auto-trade entry (non-blocking)
+    autoTrade.executeEntry(result).catch(() => {});
 
   } catch (err) {
     console.error("[SMC] Scan error:", err.message);

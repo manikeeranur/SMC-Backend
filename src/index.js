@@ -10,6 +10,7 @@ const optionChainRoutes = require("./routes/optionChain");
 const analysisRoutes    = require("./routes/analysis");
 const watchlistRoutes   = require("./routes/watchlist");
 const smcRoutes         = require("./routes/smc");
+const autoTradeRoutes   = require("./routes/autoTrade");
 const { stopTicker, subscribeTokens } = require("./websocket/ticker");
 const { isAuthenticated } = require("./config/kite");
 
@@ -26,6 +27,7 @@ app.use("/api/options",   optionChainRoutes);
 app.use("/api/analysis",  analysisRoutes);
 app.use("/api/watchlist", watchlistRoutes);
 app.use("/api/smc",       smcRoutes);
+app.use("/api/auto-trade", autoTradeRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -91,6 +93,18 @@ schedule.scheduleJob("* 9-15 * * 1-5", async () => {
   } catch (err) {
     console.error("[SMC Cron] Error:", err.message);
   }
+});
+
+// ─── 9:15 AM — Session open notification ──────────────────────────────────────
+schedule.scheduleJob("15 9 * * 1-5", () => {
+  const { sendSessionOpen } = require("./services/telegramService");
+  sendSessionOpen();
+});
+
+// ─── 3:30 PM — Session close notification ─────────────────────────────────────
+schedule.scheduleJob("30 15 * * 1-5", () => {
+  const { sendSessionClose } = require("./services/telegramService");
+  sendSessionClose();
 });
 
 // ─── Session summary at 15:21 (after all positions are force-closed at 15:20) ──

@@ -76,9 +76,10 @@ function assembleChain(instruments, quotes, spot, atm, dte, expiry) {
     const greeks = calcGreeks(spot, K, T, R, iv, typ);
 
     strikeMap[K][typ] = {
-      token:      inst.instrument_token,
-      strike:     K,
-      type:       typ,
+      token:         inst.instrument_token,
+      tradingsymbol: inst.tradingsymbol,
+      strike:        K,
+      type:          typ,
       ltp,
       prevLtp:    q.ohlc?.close || ltp,
       ltpChange:  +(ltp - (q.ohlc?.close || ltp)).toFixed(2),
