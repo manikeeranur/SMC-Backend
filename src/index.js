@@ -15,7 +15,7 @@ const { stopTicker, subscribeTokens } = require("./websocket/ticker");
 const { isAuthenticated } = require("./config/kite");
 
 const app  = express();
-const PORT = process.env.PORT || 4000;
+const PORT = 4000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors({ origin: "*" }));
