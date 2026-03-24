@@ -12,9 +12,16 @@ const autoTrade                      = require("./autoTrade");
 let alerts      = [];          // array of SMC alert objects
 let lastScanAt  = null;        // ISO string of last scan time
 let scanRunning = false;       // guard against concurrent scans
-const MAX_ALERTS    = 100;
-const COOLDOWN_MS   = 3 * 60 * 1000;  // 3 min per (strike+direction)
+let lastSLExitAt = null;       // timestamp of most recent SL exit
+const MAX_ALERTS         = 100;
+const COOLDOWN_MS        = 3 * 60 * 1000;   // 3 min per (strike+direction)
+const SL_COOLDOWN_MS     = 20 * 60 * 1000;  // 20 min pause after any SL hit
 const MAX_TRADES_PER_DAY = 25;
+
+// ─── Concepts required for a valid signal (empty = accept all) ────────────────
+// Set to e.g. ["OB"] to only alert when Order Block is present
+// Set to ["OB","FVG"] to require BOTH OB and FVG
+const REQUIRED_CONCEPTS = [];   // ← edit this to filter setups
 
 // Returns time in HH:MM (IST) format
 function timeKey() {
@@ -52,6 +59,7 @@ async function refreshActivePnL(expiry) {
       if (updated.status !== "ACTIVE" && a.status === "ACTIVE") {
         sendResultAlert(updated);
         autoTrade.executeExit(updated).catch(() => {});
+        if (updated.status === "SL") lastSLExitAt = Date.now();
       }
 
       return { ...updated, leg: { ...a.leg, ltp: newLeg.ltp ?? a.leg.ltp } };
@@ -77,7 +85,14 @@ async function doScan(expiry) {
       return;
     }
 
-    // 2b. Gate: max 25 trades per calendar day (IST)
+    // 2b. Gate: 20-min cooldown after any SL hit
+    if (lastSLExitAt && (Date.now() - lastSLExitAt) < SL_COOLDOWN_MS) {
+      const waitMin = Math.ceil((SL_COOLDOWN_MS - (Date.now() - lastSLExitAt)) / 60000);
+      console.log(`[SMC] Skipping — SL cooldown active (${waitMin} min remaining)`);
+      return;
+    }
+
+    // 2c. Gate: max 25 trades per calendar day (IST)
     const todayIST = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
     const todayCount = alerts.filter(a => {
       const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
@@ -96,7 +111,16 @@ async function doScan(expiry) {
       return;
     }
 
-    // 4. Dedup check
+    // 4. Concept filter — skip if required setup is not present
+    if (REQUIRED_CONCEPTS.length > 0) {
+      const missing = REQUIRED_CONCEPTS.filter(c => !result.concepts.includes(c));
+      if (missing.length > 0) {
+        console.log(`[SMC] Filtered — missing concepts: ${missing.join(", ")}`);
+        return;
+      }
+    }
+
+    // 5. Dedup check
     if (isDuplicate(result)) {
       console.log(`[SMC] Duplicate suppressed — ${result.direction} ${result.strike}`);
       return;
