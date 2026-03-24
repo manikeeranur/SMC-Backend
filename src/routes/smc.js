@@ -15,7 +15,7 @@ let scanRunning = false;       // guard against concurrent scans
 let lastSLExitAt = null;       // timestamp of most recent SL exit
 const MAX_ALERTS         = 100;
 const COOLDOWN_MS        = 3 * 60 * 1000;   // 3 min per (strike+direction)
-const SL_COOLDOWN_MS     = 20 * 60 * 1000;  // 20 min pause after any SL hit
+const SL_COOLDOWN_MS     = 5 * 60 * 1000;   // 5 min pause after any SL hit
 const MAX_TRADES_PER_DAY = 25;
 
 // ─── Concepts required for a valid signal (empty = accept all) ────────────────
