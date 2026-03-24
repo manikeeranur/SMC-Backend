@@ -111,7 +111,10 @@ async function doScan(expiry) {
     // 5. Telegram notification
     sendSMCAlert(result);
 
-    // 6. Auto-trade entry (non-blocking)
+    // 6. Broadcast to all WebSocket clients
+    if (_broadcast) _broadcast({ type: "scan_result", active: true, alert: result });
+
+    // 7. Auto-trade entry (non-blocking)
     autoTrade.executeEntry(result).catch(() => {});
 
   } catch (err) {
@@ -226,7 +229,12 @@ function getTodayAlerts() {
   });
 }
 
+// Injected broadcast function (set by index.js after WS server is ready)
+let _broadcast = null;
+function setBroadcast(fn) { _broadcast = fn; }
+
 // Export doScan + getTodayAlerts for cron
-module.exports               = router;
-module.exports.doScan        = doScan;
+module.exports                = router;
+module.exports.doScan         = doScan;
 module.exports.getTodayAlerts = getTodayAlerts;
+module.exports.setBroadcast   = setBroadcast;

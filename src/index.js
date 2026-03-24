@@ -56,6 +56,9 @@ function broadcast(payload) {
   clients.forEach(ws => { if (ws.readyState === 1) ws.send(msg); });
 }
 
+// Wire broadcast into smc routes so alerts reach WebSocket clients
+smcRoutes.setBroadcast(broadcast);
+
 wss.on("connection", (ws) => {
   clients.add(ws);
   console.log(`[WS] Client connected (total: ${clients.size})`);
