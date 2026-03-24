@@ -279,22 +279,22 @@ function resolveStatus(p, candles, dSwingIndex) {
   let status   = "waiting";
 
   for (const c of after) {
-    // Check entry touched
+    // Check entry touched — price must return to within 1% of D
     if (!entryHit) {
-      const touched = bull ? c.low <= entry * 1.005 : c.high >= entry * 0.995;
-      if (touched) { entryHit = true; status = "triggered"; }
+      const touched = bull ? c.low <= entry * 1.01 : c.high >= entry * 0.99;
+      if (touched) { entryHit = true; status = "triggered"; continue; }
     }
 
     if (entryHit) {
-      // Check SL hit first (stop out)
+      // SL check (separate candle from entry to avoid same-candle whipsaw)
       if (bull  && c.low  <= sl) { status = "sl"; break; }
       if (!bull && c.high >= sl) { status = "sl"; break; }
 
-      // Check T2 hit
+      // T2 hit
       if (bull  && c.high >= t2) { status = "t2"; break; }
       if (!bull && c.low  <= t2) { status = "t2"; break; }
 
-      // Check T1 hit
+      // T1 hit
       if (bull  && c.high >= t1) status = "t1";
       if (!bull && c.low  <= t1) status = "t1";
     }
@@ -327,8 +327,10 @@ function detectPatterns(swings, symbol, candles) {
 
     for (const { name, color, rel, check } of xabcdChecks) {
       if (check(X, A, B, C, D)) {
-        const xaLen = Math.abs(A - X);
-        const sl    = bullish ? D - xaLen * 0.15 : D + xaLen * 0.15;
+        const xaLen  = Math.abs(A - X);
+        const rawSl  = bullish ? D - xaLen * 0.15 : D + xaLen * 0.15;
+        // SL must be at least 1.5% from D to avoid whipsaw exits
+        const sl     = bullish ? Math.min(rawSl, D * 0.985) : Math.max(rawSl, D * 1.015);
         const t1    = bullish ? D + xaLen * 0.382 : D - xaLen * 0.382;
         const t2    = bullish ? D + xaLen * 0.618 : D - xaLen * 0.618;
         const rrRaw = Math.abs(t2 - D) / Math.abs(D - sl);
@@ -359,7 +361,8 @@ function detectPatterns(swings, symbol, candles) {
     if (checkABCD(A, B, C, D)) {
       const bullish = A < B;
       const abLen   = Math.abs(B - A);
-      const sl      = bullish ? D - abLen * 0.2 : D + abLen * 0.2;
+      const rawSl2  = bullish ? D - abLen * 0.2 : D + abLen * 0.2;
+      const sl      = bullish ? Math.min(rawSl2, D * 0.985) : Math.max(rawSl2, D * 1.015);
       const t1      = bullish ? D + abLen * 0.382 : D - abLen * 0.382;
       const t2      = bullish ? D + abLen * 0.618 : D - abLen * 0.618;
       const rrRaw   = Math.abs(t2 - D) / Math.abs(D - sl);
