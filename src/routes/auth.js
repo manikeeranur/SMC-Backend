@@ -61,11 +61,18 @@ router.get("/callback", async (req, res) => {
 });
 
 // POST /api/auth/token  { access_token }  →  set token directly (dev shortcut)
-router.post("/token", (req, res) => {
+router.post("/token", async (req, res) => {
   const { access_token } = req.body;
   if (!access_token) return res.status(400).json({ error: "Missing access_token" });
   setAccessToken(access_token);
-  res.json({ success: true, authenticated: true });
+  try {
+    const profile = await getClient().getProfile();
+    setUserName(profile.user_name || profile.user_id || "");
+    console.log(`[Auth] Manual token set for ${profile.user_name}`);
+    res.json({ success: true, authenticated: true, user_name: profile.user_name });
+  } catch {
+    res.json({ success: true, authenticated: true, user_name: "" });
+  }
 });
 
 // GET /api/auth/status
