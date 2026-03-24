@@ -11,6 +11,7 @@ const analysisRoutes    = require("./routes/analysis");
 const watchlistRoutes   = require("./routes/watchlist");
 const smcRoutes         = require("./routes/smc");
 const autoTradeRoutes   = require("./routes/autoTrade");
+const harmonicsRoutes   = require("./routes/harmonics");
 const { stopTicker, subscribeTokens } = require("./websocket/ticker");
 const { isAuthenticated } = require("./config/kite");
 
@@ -22,12 +23,13 @@ app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 // ─── REST Routes ─────────────────────────────────────────────────────────────
-app.use("/api/auth",      authRoutes);
-app.use("/api/options",   optionChainRoutes);
-app.use("/api/analysis",  analysisRoutes);
-app.use("/api/watchlist", watchlistRoutes);
-app.use("/api/smc",       smcRoutes);
+app.use("/api/auth",       authRoutes);
+app.use("/api/options",    optionChainRoutes);
+app.use("/api/analysis",   analysisRoutes);
+app.use("/api/watchlist",  watchlistRoutes);
+app.use("/api/smc",        smcRoutes);
 app.use("/api/auto-trade", autoTradeRoutes);
+app.use("/api/harmonics",  harmonicsRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
