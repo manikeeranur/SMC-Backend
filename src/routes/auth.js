@@ -1,6 +1,6 @@
 const express = require("express");
 const router  = express.Router();
-const { getClient, setAccessToken, getAccessToken, isAuthenticated, clearToken } = require("../config/kite");
+const { getClient, setAccessToken, getAccessToken, getUserName, setUserName, isAuthenticated, clearToken } = require("../config/kite");
 require("dotenv").config();
 
 const FRONTEND = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -49,6 +49,7 @@ router.get("/callback", async (req, res) => {
       process.env.KITE_API_SECRET
     );
     setAccessToken(session.access_token);
+    setUserName(session.user_name || "");
     console.log(`[Auth] Logged in as ${session.user_name} (${session.user_id})`);
     syncTokenToRender(session.access_token); // fire-and-forget
     // Redirect browser back to frontend with success flag
@@ -72,11 +73,11 @@ router.get("/status", (req, res) => {
   res.json({ authenticated: isAuthenticated() });
 });
 
-// GET /api/auth/token-value  →  returns current token (use once to copy into Render env var)
+// GET /api/auth/token-value  →  returns current token + username
 router.get("/token-value", (req, res) => {
   const token = getAccessToken();
   if (!token) return res.status(401).json({ error: "Not authenticated" });
-  res.json({ access_token: token });
+  res.json({ access_token: token, user_name: getUserName() });
 });
 
 // POST /api/auth/logout  →  clear token and session

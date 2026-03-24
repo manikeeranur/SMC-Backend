@@ -263,8 +263,48 @@ function tvGuide(pattern, swings, tf, direction) {
   return "";
 }
 
+// ─── Auto-detect status from candles after D point ───────────────────────────
+function resolveStatus(p, candles, dSwingIndex) {
+  // candles after D
+  const after = candles.slice(dSwingIndex + 1);
+  if (!after.length) return "waiting";
+
+  const bull    = p.direction === "bull";
+  const entry   = p.dPoint;
+  const sl      = p.stop;
+  const t1      = p.t1;
+  const t2      = p.t2;
+
+  let entryHit = false;
+  let status   = "waiting";
+
+  for (const c of after) {
+    // Check entry touched
+    if (!entryHit) {
+      const touched = bull ? c.low <= entry * 1.005 : c.high >= entry * 0.995;
+      if (touched) { entryHit = true; status = "triggered"; }
+    }
+
+    if (entryHit) {
+      // Check SL hit first (stop out)
+      if (bull  && c.low  <= sl) { status = "sl"; break; }
+      if (!bull && c.high >= sl) { status = "sl"; break; }
+
+      // Check T2 hit
+      if (bull  && c.high >= t2) { status = "t2"; break; }
+      if (!bull && c.low  <= t2) { status = "t2"; break; }
+
+      // Check T1 hit
+      if (bull  && c.high >= t1) status = "t1";
+      if (!bull && c.low  <= t1) status = "t1";
+    }
+  }
+
+  return status;
+}
+
 // ─── Detect patterns from swing array ────────────────────────────────────────
-function detectPatterns(swings, symbol) {
+function detectPatterns(swings, symbol, candles) {
   const results = [];
   const n = swings.length;
   if (n < 5) return results;
@@ -283,6 +323,7 @@ function detectPatterns(swings, symbol) {
     const pts = swings.slice(i, i + 5);
     const [X, A, B, C, D] = pts.map(s => s.price);
     const bullish = X < A;
+    const dSwingIndex = pts[4].index; // candle index of D point
 
     for (const { name, color, rel, check } of xabcdChecks) {
       if (check(X, A, B, C, D)) {
@@ -292,7 +333,7 @@ function detectPatterns(swings, symbol) {
         const t2    = bullish ? D + xaLen * 0.618 : D - xaLen * 0.618;
         const rrRaw = Math.abs(t2 - D) / Math.abs(D - sl);
         const swingPrices = { X, A, B, C, D };
-        results.push({
+        const p = {
           stock: symbol, pattern: name, shape: "XABCD",
           direction: bullish ? "bull" : "bear",
           swings: swingPrices,
@@ -303,7 +344,9 @@ function detectPatterns(swings, symbol) {
           rr:     `1:${rrRaw.toFixed(1)}`,
           confidence: rel, color, tf: "",
           tvGuide: tvGuide(name, swingPrices, "", bullish ? "bull" : "bear"),
-        });
+        };
+        p.status = resolveStatus(p, candles, dSwingIndex);
+        results.push(p);
         break;
       }
     }
@@ -321,7 +364,7 @@ function detectPatterns(swings, symbol) {
       const t2      = bullish ? D + abLen * 0.618 : D - abLen * 0.618;
       const rrRaw   = Math.abs(t2 - D) / Math.abs(D - sl);
       const swingPrices = { A, B, C, D };
-      results.push({
+      const p = {
         stock: symbol, pattern: "ABCD", shape: "ABCD",
         direction: bullish ? "bull" : "bear",
         swings: swingPrices,
@@ -332,7 +375,9 @@ function detectPatterns(swings, symbol) {
         rr:     `1:${rrRaw.toFixed(1)}`,
         confidence: 72, color: "#f59e0b", tf: "",
         tvGuide: tvGuide("ABCD", swingPrices, "", bullish ? "bull" : "bear"),
-      });
+      };
+      p.status = resolveStatus(p, candles, pts[3].index);
+      results.push(p);
     }
   }
 
@@ -340,8 +385,9 @@ function detectPatterns(swings, symbol) {
   for (let i = Math.max(0, n - 8); i <= n - 5; i++) {
     const pts = swings.slice(i, i + 5);
     const [p1, p2, p3, p4, p5] = pts.map(s => s.price);
+    const lastIdx = pts[4].index;
 
-    // N Pattern bullish: shallow pullback then new high
+    // N Pattern bullish
     const bcBull = Math.abs(p3 - p2) / Math.abs(p2 - p1);
     if (bcBull < 0.55 && p5 > p2) {
       const abLen = Math.abs(p2 - p1);
@@ -350,7 +396,7 @@ function detectPatterns(swings, symbol) {
       const t2    = p5 + abLen * 0.618;
       const rrRaw = Math.abs(t2 - p5) / Math.abs(p5 - sl);
       const sw    = { A:p1, B:p2, C:p3, D:p5 };
-      results.push({
+      const p = {
         stock: symbol, pattern: "N Pattern", shape: "Continuation",
         direction: "bull", swings: sw,
         dPoint: Math.round(p3 * 100) / 100,
@@ -360,10 +406,12 @@ function detectPatterns(swings, symbol) {
         rr:     `1:${rrRaw.toFixed(1)}`,
         confidence: 70, color: "#06b6d4", tf: "",
         tvGuide: tvGuide("N Pattern", sw, "", "bull"),
-      });
+      };
+      p.status = resolveStatus(p, candles, pts[2].index);
+      results.push(p);
     }
 
-    // N Pattern bearish: shallow bounce then new low
+    // N Pattern bearish
     const bcBear = Math.abs(p3 - p2) / Math.abs(p1 - p2);
     if (bcBear < 0.55 && p5 < p2) {
       const abLen = Math.abs(p1 - p2);
@@ -372,7 +420,7 @@ function detectPatterns(swings, symbol) {
       const t2    = p5 - abLen * 0.618;
       const rrRaw = Math.abs(p5 - t2) / Math.abs(sl - p5);
       const sw    = { A:p1, B:p2, C:p3, D:p5 };
-      results.push({
+      const p = {
         stock: symbol, pattern: "N Pattern", shape: "Continuation",
         direction: "bear", swings: sw,
         dPoint: Math.round(p3 * 100) / 100,
@@ -382,10 +430,12 @@ function detectPatterns(swings, symbol) {
         rr:     `1:${rrRaw.toFixed(1)}`,
         confidence: 70, color: "#06b6d4", tf: "",
         tvGuide: tvGuide("N Pattern", sw, "", "bear"),
-      });
+      };
+      p.status = resolveStatus(p, candles, pts[2].index);
+      results.push(p);
     }
 
-    // W Pattern: double bottom — p1≈p3 lows, p2/p4 neck, p5 breakout above neck
+    // W Pattern
     const troughDiff = Math.abs(p3 - p1) / (Math.abs(p1) || 1);
     const neck       = Math.max(p2, p4);
     if (troughDiff <= 0.04 && p5 > neck && p1 < p2 && p3 < p4) {
@@ -395,7 +445,7 @@ function detectPatterns(swings, symbol) {
       const t2     = neck + height;
       const rrRaw  = Math.abs(t2 - neck) / Math.abs(neck - sl);
       const sw     = { A:p1, B:p2, C:p3, D:t2 };
-      results.push({
+      const p = {
         stock: symbol, pattern: "W Pattern", shape: "Double Bottom",
         direction: "bull", swings: sw,
         dPoint: Math.round(neck * 100) / 100,
@@ -405,10 +455,12 @@ function detectPatterns(swings, symbol) {
         rr:     `1:${rrRaw.toFixed(1)}`,
         confidence: 68, color: "#10b981", tf: "",
         tvGuide: tvGuide("W Pattern", sw, "", "bull"),
-      });
+      };
+      p.status = resolveStatus(p, candles, lastIdx);
+      results.push(p);
     }
 
-    // M Pattern: double top — p1≈p3 highs, p2/p4 neck, p5 breakdown below neck
+    // M Pattern
     const peakDiff = Math.abs(p3 - p1) / (Math.abs(p1) || 1);
     const neckLow  = Math.min(p2, p4);
     if (peakDiff <= 0.04 && p5 < neckLow && p1 > p2 && p3 > p4) {
@@ -418,7 +470,7 @@ function detectPatterns(swings, symbol) {
       const t2     = neckLow - height;
       const rrRaw  = Math.abs(neckLow - t2) / Math.abs(sl - neckLow);
       const sw     = { A:p1, B:p2, C:p3, D:t2 };
-      results.push({
+      const p = {
         stock: symbol, pattern: "M Pattern", shape: "Double Top",
         direction: "bear", swings: sw,
         dPoint: Math.round(neckLow * 100) / 100,
@@ -428,7 +480,9 @@ function detectPatterns(swings, symbol) {
         rr:     `1:${rrRaw.toFixed(1)}`,
         confidence: 68, color: "#e11d48", tf: "",
         tvGuide: tvGuide("M Pattern", sw, "", "bear"),
-      });
+      };
+      p.status = resolveStatus(p, candles, lastIdx);
+      results.push(p);
     }
   }
 
@@ -498,7 +552,7 @@ router.get("/scan", async (req, res) => {
 
         const deviation = interval === "1W" ? 0.06 : interval === "1D" ? 0.04 : 0.03;
         const swings    = detectSwings(candles, deviation);
-        const patterns  = detectPatterns(swings, symbol);
+        const patterns  = detectPatterns(swings, symbol, candles);
 
         for (const p of patterns) {
           if (filterPat !== "All" && p.pattern !== filterPat) continue;

@@ -3,6 +3,7 @@ require("dotenv").config();
 
 let kc = null;
 let accessToken = null;
+let userName = "";
 
 function getClient() {
   if (!kc) {
@@ -17,10 +18,13 @@ function setAccessToken(token) {
 }
 
 function getAccessToken() { return accessToken; }
+function getUserName()    { return userName; }
+function setUserName(n)   { userName = n; }
 function isAuthenticated() { return !!accessToken; }
 
 function clearToken() {
   accessToken = null;
+  userName = "";
   if (kc) kc.setAccessToken("");
 }
 
@@ -34,4 +38,4 @@ try {
   }
 } catch {}
 
-module.exports = { getClient, setAccessToken, getAccessToken, isAuthenticated, clearToken };
+module.exports = { getClient, setAccessToken, getAccessToken, getUserName, setUserName, isAuthenticated, clearToken };
