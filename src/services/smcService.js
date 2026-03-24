@@ -207,13 +207,11 @@ async function findBestLeg(direction, expiry, spot) {
 async function runSMCScan(expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
-  // ── Time gate: 9:21 AM – 3:30 PM ──────────────────────────────────────────
+  // ── Time gate: 9:21 AM only ────────────────────────────────────────────────
   const now = new Date();
   const h   = now.getHours(), m = now.getMinutes();
   if (h < 9 || (h === 9 && m < 21))
     return { signal: false, reason: `Too early (${h}:${String(m).padStart(2,"0")}) — scan starts at 09:21` };
-  if (h >= 15)
-    return { signal: false, reason: "No new entries after 15:00" };
 
   // ── Fetch NIFTY 1-min candles from 9:15 AM ─────────────────────────────────
   const from = new Date(now); from.setHours(9, 15, 0, 0);
@@ -295,6 +293,7 @@ async function runSMCScan(expiry) {
     status:     "ACTIVE",
     currentPnL: 0,
     pnlPct:     0,
+    peakMove:   0,
     spot,
     expiry,
     createdAt:  now.toISOString(),
@@ -333,7 +332,10 @@ function updateAlertPnL(alert, currentLtp) {
     ? new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" })
     : alert.exitTime;
 
-  return { ...alert, currentPnL: pnl, pnlPct: pct, status, t1Hit, t1HitTime, exitTime, lastLtp: currentLtp };
+  // Track peak upward move from entry (high water mark)
+  const peakMove = +(Math.max(alert.peakMove ?? 0, currentLtp - alert.rr.entry)).toFixed(2);
+
+  return { ...alert, currentPnL: pnl, pnlPct: pct, status, t1Hit, t1HitTime, exitTime, lastLtp: currentLtp, peakMove };
 }
 
 // ─── IST time helper (Render runs UTC — always use this for IST comparisons) ──
@@ -514,10 +516,12 @@ async function runHistoricalSMCScan(date, expiry) {
     const entryMs    = new Date(entryCandle.date).getTime();
     const laterCandles = oc.filter(c => new Date(c.date).getTime() > entryMs);
 
-    let status = "ACTIVE", exitPrice = entry, exitTime = null, t1Hit = false, t1HitTime = null;
+    let status = "ACTIVE", exitPrice = entry, exitTime = null, t1Hit = false, t1HitTime = null, peakMove = 0;
     for (const c of laterCandles) {
       const elapsedMin = (new Date(c.date).getTime() - entryMs) / 60000;
       const { h: ch, m: cm } = toIST(c.date);
+      // Track peak upward move (high water mark above entry)
+      peakMove = +(Math.max(peakMove, c.high - entry)).toFixed(2);
       // Track T1 milestone — record hit time once
       if (!t1Hit && c.high >= rr.target1) {
         t1Hit     = true;
@@ -563,6 +567,7 @@ async function runHistoricalSMCScan(date, expiry) {
       t1HitTime,
       currentPnL: pnl,
       pnlPct:     pct,
+      peakMove:   peakMove > 0 ? peakMove : null,
       spot:       sig.spot,
       expiry,
       createdAt:  sig.signalTime,

@@ -224,10 +224,14 @@ router.get("/historical", async (req, res) => {
   if (!date || !expiry)
     return res.status(400).json({ error: "date and expiry are required" });
 
-  // Reject future dates
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  if (new Date(date) >= today)
-    return res.status(400).json({ error: "date must be a past date for backtesting" });
+  // Reject future dates; allow today only after market close (15:30 IST)
+  const nowIST   = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const today    = new Date(nowIST); today.setUTCHours(0, 0, 0, 0);
+  const reqDate  = new Date(date);
+  const isToday  = reqDate.toISOString().slice(0, 10) === today.toISOString().slice(0, 10);
+  const marketClosed = nowIST.getUTCHours() > 15 || (nowIST.getUTCHours() === 15 && nowIST.getUTCMinutes() >= 30);
+  if (reqDate > today || (isToday && !marketClosed))
+    return res.status(400).json({ error: "Today's backtest is available after market close (15:30 IST)" });
 
   try {
     console.log(`[SMC Historical] Backtesting ${date} expiry ${expiry}...`);
