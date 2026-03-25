@@ -11,8 +11,11 @@ const analysisRoutes    = require("./routes/analysis");
 const watchlistRoutes   = require("./routes/watchlist");
 const smcRoutes         = require("./routes/smc");
 const autoTradeRoutes   = require("./routes/autoTrade");
+const resultsRoutes     = require("./routes/results");
 const { stopTicker, subscribeTokens } = require("./websocket/ticker");
 const { isAuthenticated } = require("./config/kite");
+const { connectDB }       = require("./config/db");
+const { syncAlerts }      = require("./services/dbSyncService");
 
 const app  = express();
 const PORT = process.env.PORT || 4000;
@@ -28,6 +31,7 @@ app.use("/api/analysis",  analysisRoutes);
 app.use("/api/watchlist", watchlistRoutes);
 app.use("/api/smc",       smcRoutes);
 app.use("/api/auto-trade", autoTradeRoutes);
+app.use("/api/results",   resultsRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -120,6 +124,13 @@ schedule.scheduleJob("21 15 * * 1-5", async () => {
     console.error("[SMC Session Summary] Error:", err.message);
   }
 });
+
+// ─── MongoDB: connect on startup + sync alerts every second ──────────────────
+connectDB();
+setInterval(() => {
+  const all = smcRoutes.getAllAlerts?.() ?? [];
+  if (all.length) syncAlerts(all).catch(() => {});
+}, 1000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const { isConfigured: tgOk } = require("./services/telegramService");

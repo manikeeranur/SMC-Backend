@@ -79,10 +79,9 @@ router.get("/token-value", (req, res) => {
   res.json({ access_token: token });
 });
 
-// POST /api/auth/logout  →  clear token and session
+// POST /api/auth/logout  →  UI logout only, backend retains token for scanning
 router.post("/logout", (req, res) => {
-  clearToken();
-  console.log("[Auth] Logged out — token cleared");
+  console.log("[Auth] UI logout — backend token retained, scanning continues");
   res.json({ success: true, authenticated: false });
 });
 

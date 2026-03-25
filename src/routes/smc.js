@@ -7,11 +7,16 @@ const { buildOptionChain }           = require("../services/optionChainService")
 const { sendSMCAlert, sendResultAlert, sendBacktestResults } = require("../services/telegramService");
 const { isAuthenticated }            = require("../config/kite");
 const autoTrade                      = require("./autoTrade");
+const { saveAlert, saveBacktest }    = require("../services/dbSyncService");
+const Alert          = require("../models/Alert");
+const BacktestResult = require("../models/BacktestResult");
+const { isConnected }                = require("../config/db");
 
 // ─── In-memory store ──────────────────────────────────────────────────────────
 let alerts      = [];          // array of SMC alert objects
 let lastScanAt  = null;        // ISO string of last scan time
 let scanRunning = false;       // guard against concurrent scans
+let lastMongoSync = 0;         // timestamp of last MongoDB sync (ms)
 const MAX_ALERTS    = 100;
 const COOLDOWN_MS   = 3 * 60 * 1000;  // 3 min per (strike+direction)
 const MAX_TRADES_PER_DAY = 25;
@@ -105,6 +110,7 @@ async function doScan(expiry) {
     // 5. Add to alerts list
     alerts.unshift(result);
     if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS;
+    saveAlert(result).catch(() => {}); // persist to MongoDB
 
     console.log(`[SMC] ✅ Alert: ${result.direction} ${result.strike} @ ₹${result.rr.entry}  [${result.concepts.join("+")}]  strength=${result.strength}`);
 
@@ -151,6 +157,38 @@ router.get("/alerts", async (req, res) => {
 
   const { expiry } = req.query;
   if (!expiry) return res.status(400).json({ error: "expiry required" });
+
+  // Sync missing today's alerts from MongoDB every 60s
+  const now = Date.now();
+  if (isConnected() && (now - lastMongoSync > 60_000)) {
+    lastMongoSync = now;
+    try {
+      const todayIST = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+      const docs = await Alert.find({ date: todayIST }).sort({ createdAt: 1 }).lean();
+      if (docs.length) {
+        const inMemoryIds = new Set(alerts.map(a => a.id || a.alertId));
+        const missing = docs.filter(d => !inMemoryIds.has(d.alertId));
+        if (missing.length) {
+          const restored = missing.map(d => ({
+            id: d.alertId, alertId: d.alertId,
+            date: d.date, direction: d.direction, strike: d.strike, expiry: d.expiry,
+            entryTime: d.entryTime, exitTime: d.exitTime, spot: d.spot,
+            concepts: d.concepts ?? [], score: d.score, effScore: d.effScore,
+            strength: d.strength, trendOk: d.trendOk, rr: d.rr,
+            status: d.status, currentPnL: d.currentPnL ?? 0,
+            pnlPct: d.pnlPct ?? 0, peakMove: d.peakMove ?? 0,
+            t1Hit: d.t1Hit, t1HitTime: d.t1HitTime,
+            lastLtp: d.lastLtp, createdAt: d.createdAt,
+          }));
+          alerts = [...alerts, ...restored];
+          if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS;
+          console.log(`[SMC] Synced ${missing.length} missing alerts from MongoDB (total: ${alerts.length})`);
+        }
+      }
+    } catch (e) {
+      console.error("[SMC] MongoDB sync failed:", e.message);
+    }
+  }
 
   // On each GET, also refresh active P&L (lightweight — reuses cached chain)
   await refreshActivePnL(expiry).catch(() => {});
@@ -209,10 +247,32 @@ router.get("/historical", async (req, res) => {
 
     // Send Telegram summary (non-blocking)
     sendBacktestResults(result).catch(() => {});
+    saveBacktest(result).catch(() => {}); // persist to MongoDB
 
     res.json(result);
   } catch (err) {
     console.error("[SMC Historical] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/smc/backtest-db?date=YYYY-MM-DD — load backtest result from MongoDB
+router.get("/backtest-db", async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: "date required" });
+  if (!isConnected()) return res.status(503).json({ error: "MongoDB not connected" });
+
+  try {
+    const doc = await BacktestResult.findOne({ date }).lean();
+    if (!doc) return res.json({ results: [], winRate: null });
+    res.json({
+      results:      doc.results      ?? [],
+      winRate:      doc.winRate      ?? null,
+      wins:         doc.wins         ?? 0,
+      losses:       doc.losses       ?? 0,
+      totalSignals: doc.totalSignals ?? 0,
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -227,6 +287,7 @@ function getTodayAlerts() {
 }
 
 // Export doScan + getTodayAlerts for cron
-module.exports               = router;
-module.exports.doScan        = doScan;
+module.exports                = router;
+module.exports.doScan         = doScan;
 module.exports.getTodayAlerts = getTodayAlerts;
+module.exports.getAllAlerts    = () => alerts;
