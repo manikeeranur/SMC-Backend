@@ -106,7 +106,7 @@ router.get("/chain/:expiry", async (req, res) => {
 
   const { expiry } = req.params;
   const cached = cache[expiry];
-  if (cached && Date.now() - cached.ts < 2000) return res.json(cached.data);
+  if (cached && Date.now() - cached.ts < 500) return res.json(cached.data);
 
   try {
     const data = await buildOptionChain(expiry, Number(req.query.strikes) || 15);

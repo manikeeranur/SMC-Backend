@@ -333,7 +333,8 @@ function updateAlertPnL(alert, currentLtp) {
     ? new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" })
     : alert.exitTime;
 
-  return { ...alert, currentPnL: pnl, pnlPct: pct, status, t1Hit, t1HitTime, exitTime, lastLtp: currentLtp };
+  const peakMove = +(Math.max(alert.peakMove ?? 0, currentLtp - alert.rr.entry)).toFixed(2);
+  return { ...alert, currentPnL: pnl, pnlPct: pct, status, t1Hit, t1HitTime, exitTime, lastLtp: currentLtp, peakMove };
 }
 
 // ─── IST time helper (Render runs UTC — always use this for IST comparisons) ──
