@@ -20,11 +20,12 @@ const { syncAlerts }      = require("./services/dbSyncService");
 const app  = express();
 const PORT = process.env.PORT || 4000;
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
+// ─── Middleware ──────────────────────────────────────────────────────────
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// ─── REST Routes ─────────────────────────────────────────────────────────────
+
+// ─── REST Routes ────────────────────────────────────────────────────────
 app.use("/api/auth",      authRoutes);
 app.use("/api/options",   optionChainRoutes);
 app.use("/api/analysis",  analysisRoutes);
