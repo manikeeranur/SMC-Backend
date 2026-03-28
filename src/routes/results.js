@@ -8,6 +8,7 @@ const { isConnected } = require("../config/db");
 
 // ── GET /api/results  →  available dates for live + backtest ─────────────────
 router.get("/", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const { type, date } = req.query;
 
   // ── Return rows for a specific date ────────────────────────────────────────
