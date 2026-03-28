@@ -515,10 +515,13 @@ async function runHistoricalSMCScan(date, expiry) {
     const entryMs    = new Date(entryCandle.date).getTime();
     const laterCandles = oc.filter(c => new Date(c.date).getTime() > entryMs);
 
-    let status = "ACTIVE", exitPrice = entry, exitTime = null, t1Hit = false, t1HitTime = null;
+    let status = "ACTIVE", exitPrice = entry, exitTime = null, t1Hit = false, t1HitTime = null, peakMove = 0;
     for (const c of laterCandles) {
       const elapsedMin = (new Date(c.date).getTime() - entryMs) / 60000;
       const { h: ch, m: cm } = toIST(c.date);
+      // Track peak high move from entry
+      const move = +(c.high - entry).toFixed(2);
+      if (move > peakMove) peakMove = move;
       // Track T1 milestone — record hit time once
       if (!t1Hit && c.high >= rr.target1) {
         t1Hit     = true;
@@ -564,6 +567,7 @@ async function runHistoricalSMCScan(date, expiry) {
       t1HitTime,
       currentPnL: pnl,
       pnlPct:     pct,
+      peakMove,
       spot:       sig.spot,
       expiry,
       createdAt:  sig.signalTime,
