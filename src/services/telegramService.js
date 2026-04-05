@@ -1,6 +1,7 @@
 "use strict";
 
 const https = require("https");
+const { LOT_SIZE } = require("../config/constants");
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHAT_ID   = process.env.TELEGRAM_CHAT_ID   || "";
@@ -75,7 +76,7 @@ function sendResultAlert(alert) {
   const t2Hit = alert.status === "TARGET";
   const t1Str = t1Hit ? `Hit ✅${alert.t1HitTime ? `  (${alert.t1HitTime})` : ""}` : "Not Hit ❌";
   const t2Str = t2Hit ? `Hit ✅${alert.exitTime   ? `  (${alert.exitTime})`   : ""}` : "Not Hit ❌";
-  const lotPnl = alert.currentPnL * 65;
+  const lotPnl = alert.currentPnL * LOT_SIZE;
   const sign   = lotPnl >= 0 ? "+" : "-";
   const pnlStr = `${sign}${Math.abs(lotPnl).toFixed(0)} RS`;
 
@@ -109,7 +110,7 @@ async function sendBacktestResults(data) {
     : "";
 
   // Total lot P&L across all trades
-  const totalLot = results.reduce((s, r) => s + (r.currentPnL ?? 0) * 65, 0);
+  const totalLot = results.reduce((s, r) => s + (r.currentPnL ?? 0) * LOT_SIZE, 0);
   const tSign    = totalLot >= 0 ? "+" : "−";
   const tAbs     = Math.abs(totalLot);
   const totalLotStr = tAbs >= 1000
@@ -126,10 +127,10 @@ async function sendBacktestResults(data) {
     `🛑 SL HIT      : ${losses}`,
     `🕐 EOD/Open    : ${eod}`,
     `🏆 Win Rate    : <b>${wrStr}</b> (${wins}W / ${losses}L)`,
-    `📦 LOT P&L (65): <b>${totalLotStr}</b>`,
+    `📦 LOT P&L (${LOT_SIZE}): <b>${totalLotStr}</b>`,
     bar ? `\n${bar}` : "",
     ``,
-    `<i>SL −12%  ·  Target +24%  ·  Entry ≥ 09:21  ·  1 lot = 65 qty</i>`,
+    `<i>SL −12%  ·  Target +24%  ·  Entry ≥ 09:21  ·  1 lot = ${LOT_SIZE} qty</i>`,
   ].filter(l => l !== "");
 
   await post(summaryLines.join("\n"));
@@ -146,7 +147,7 @@ async function sendBacktestResults(data) {
     const t2Hit  = r.status === "TARGET";
     const t1Str  = t1Hit ? `Hit ✅${r.t1HitTime ? `  (${r.t1HitTime})` : ""}` : "Not Hit ❌";
     const t2Str  = t2Hit ? `Hit ✅${r.exitTime   ? `  (${r.exitTime})`  : ""}` : "Not Hit ❌";
-    const lotPnl = r.currentPnL * 65;
+    const lotPnl = r.currentPnL * LOT_SIZE;
     const sign   = lotPnl >= 0 ? "+" : "-";
     const pnlStr = `${sign}${Math.abs(lotPnl).toFixed(0)} RS`;
     tradeLines.push(
@@ -182,7 +183,7 @@ async function sendSessionSummary(todayAlerts) {
   const wins     = closed.filter(a => a.status === "TARGET" || a.status === "TIME_PROFIT").length;
   const losses   = closed.length - wins;
   const wr       = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(0) : 0;
-  const totalLot = closed.reduce((s, a) => s + (a.currentPnL ?? 0) * 65, 0);
+  const totalLot = closed.reduce((s, a) => s + (a.currentPnL ?? 0) * LOT_SIZE, 0);
   const tSign    = totalLot >= 0 ? "+" : "-";
   const totalStr = `${tSign}${Math.abs(totalLot).toFixed(0)} RS`;
 
@@ -200,7 +201,7 @@ async function sendSessionSummary(todayAlerts) {
     const t2Hit  = a.status === "TARGET";
     const t1Str  = t1Hit ? `✅${a.t1HitTime ? ` ${a.t1HitTime}` : ""}` : "❌";
     const t2Str  = t2Hit ? `✅${a.exitTime   ? ` ${a.exitTime}`  : ""}` : "❌";
-    const lotPnl = (a.currentPnL ?? 0) * 65;
+    const lotPnl = (a.currentPnL ?? 0) * LOT_SIZE;
     const sign   = lotPnl >= 0 ? "+" : "-";
     const pStr   = `${sign}${Math.abs(lotPnl).toFixed(0)} RS`;
     lines.push(`${i + 1}. <b>${a.strike} ${a.direction}</b>  ${a.entryTime}→${a.exitTime ?? "—"}  (${exitReason(a.status)})`);
@@ -249,7 +250,7 @@ function sendAutoTradeStarted() {
     `🟢 <b>AUTO TRADE — STARTED</b>`,
     ``,
     `🕐 Time   : ${time} IST`,
-    `📦 Lot    : 1 (65 qty)`,
+    `📦 Lot    : 1 (${LOT_SIZE} qty)`,
     `⚡ Orders : MARKET entry + SL-M stop loss`,
     ``,
     `<i>Live SMC alerts will now place real Kite orders.</i>`,

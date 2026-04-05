@@ -4,11 +4,7 @@ const express = require("express");
 const router  = express.Router();
 const { getClient, isAuthenticated } = require("../config/kite");
 const { sendAutoTradeStarted, sendAutoTradeStopped, sendAutoTradeOrder } = require("../services/telegramService");
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-const LOT_SIZE = 65;   // NIFTY lot size
-const EXCHANGE = "NFO";
-const PRODUCT  = "MIS"; // intraday
+const { LOT_SIZE, EXCHANGE, PRODUCT } = require("../config/constants");
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let enabled   = false;
@@ -59,7 +55,7 @@ async function executeEntry(alert) {
     });
     pos.entryOrderId = entryResp.order_id;
     pos.status = "ENTRY_PLACED";
-    log(alertId, `Entry order placed — ${sym} BUY 75 @ MARKET  [order_id: ${entryResp.order_id}]`);
+    log(alertId, `Entry order placed — ${sym} BUY ${LOT_SIZE} @ MARKET  [order_id: ${entryResp.order_id}]`);
 
     // 2. SL-M SELL at rr.sl
     const slResp = await getClient().placeOrder("regular", {
