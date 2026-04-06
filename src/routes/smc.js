@@ -23,8 +23,7 @@ const MAX_TRADES_PER_DAY = 25;
 
 // Returns time in HH:MM (IST) format
 function timeKey() {
-  const n = new Date();
-  return `${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}`;
+  return new Date().toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
 }
 
 // ─── Dedup: same strike+direction within cooldown ─────────────────────────────
@@ -132,7 +131,8 @@ async function doScan(expiry) {
 // GET /api/smc/status
 router.get("/status", (req, res) => {
   const now = new Date();
-  const h   = now.getHours(), m = now.getMinutes(), day = now.getDay();
+  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours(), m = ist.getMinutes(), day = ist.getDay();
   const marketOpen = day >= 1 && day <= 5 && (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m <= 30));
   const scanActive = marketOpen && (h > 9 || (h === 9 && m >= 21));
   const wins  = alerts.filter(a => a.status === "TARGET").length;

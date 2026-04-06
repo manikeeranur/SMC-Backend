@@ -77,7 +77,8 @@ function calcPnL(current, rr) {
 }
 
 function is926() {
-  const n = new Date(), h = n.getHours(), m = n.getMinutes();
+  const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours(), m = ist.getMinutes();
   return (h === 9 && m >= 26) || h > 9;
 }
 

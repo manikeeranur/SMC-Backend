@@ -1,3 +1,4 @@
+process.env.TZ = "Asia/Kolkata"; // MUST be first line — fixes all getHours()/cron on UTC servers (AWS)
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -43,10 +44,8 @@ app.get("/api/health", (req, res) => {
 });
 
 function isMarketOpen() {
-  const now = new Date(),
-    h = now.getHours(),
-    m = now.getMinutes(),
-    day = now.getDay();
+  const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours(), m = ist.getMinutes(), day = ist.getDay();
   if (day === 0 || day === 6) return false;
   return (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m <= 30));
 }
@@ -92,13 +91,12 @@ wss.on("connection", (ws) => {
   ws.on("error", () => clients.delete(ws));
 });
 
-// ─── SMC Scanner — every minute, Mon–Fri, 9:21 AM – 3:30 PM ──────────────────
-schedule.scheduleJob("* 9-15 * * 1-5", async () => {
+// ─── SMC Scanner — every minute, Mon–Fri, 9:21 AM – 3:30 PM IST ──────────────
+schedule.scheduleJob({ rule: "* 9-15 * * 1-5", tz: "Asia/Kolkata" }, async () => {
   if (!isAuthenticated()) return;
 
-  const now = new Date();
-  const h = now.getHours(),
-    m = now.getMinutes();
+  const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours(), m = ist.getMinutes();
   // Only fire 9:21 AM onwards, stop at 15:30
   if (h === 9 && m < 21) return;
   if (h === 15 && m > 30) return;
@@ -114,20 +112,20 @@ schedule.scheduleJob("* 9-15 * * 1-5", async () => {
   }
 });
 
-// ─── 9:15 AM — Session open notification ──────────────────────────────────────
-schedule.scheduleJob("15 9 * * 1-5", () => {
+// ─── 9:15 AM IST — Session open notification ──────────────────────────────────
+schedule.scheduleJob({ rule: "15 9 * * 1-5", tz: "Asia/Kolkata" }, () => {
   const { sendSessionOpen } = require("./src/services/telegramService");
   sendSessionOpen();
 });
 
-// ─── 3:30 PM — Session close notification ─────────────────────────────────────
-schedule.scheduleJob("30 15 * * 1-5", () => {
+// ─── 3:30 PM IST — Session close notification ─────────────────────────────────
+schedule.scheduleJob({ rule: "30 15 * * 1-5", tz: "Asia/Kolkata" }, () => {
   const { sendSessionClose } = require("./src/services/telegramService");
   sendSessionClose();
 });
 
-// ─── Session summary at 15:21 (after all positions are force-closed at 15:20) ──
-schedule.scheduleJob("21 15 * * 1-5", async () => {
+// ─── Session summary at 15:21 IST ─────────────────────────────────────────────
+schedule.scheduleJob({ rule: "21 15 * * 1-5", tz: "Asia/Kolkata" }, async () => {
   try {
     const { sendSessionSummary } = require("./src/services/telegramService");
     const todayAlerts = smcRoutes.getTodayAlerts();

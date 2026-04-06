@@ -207,13 +207,14 @@ async function findBestLeg(direction, expiry, spot) {
 async function runSMCScan(expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
-  // ── Time gate: 9:21 AM – 3:30 PM ──────────────────────────────────────────
+  // ── Time gate: 9:21 AM – 3:30 PM IST ──────────────────────────────────────
   const now = new Date();
-  const h   = now.getHours(), m = now.getMinutes();
+  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h   = ist.getHours(), m = ist.getMinutes();
   if (h < 9 || (h === 9 && m < 21))
-    return { signal: false, reason: `Too early (${h}:${String(m).padStart(2,"0")}) — scan starts at 09:21` };
+    return { signal: false, reason: `Too early (${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")} IST) — scan starts at 09:21` };
   if (h >= 15)
-    return { signal: false, reason: "No new entries after 15:00" };
+    return { signal: false, reason: "No new entries after 15:00 IST" };
 
   // ── Fetch NIFTY 1-min candles from 9:15 AM ─────────────────────────────────
   const from = new Date(now); from.setHours(9, 15, 0, 0);
@@ -546,7 +547,7 @@ async function runHistoricalSMCScan(date, expiry) {
     const pct = +(pnl / entry * 100).toFixed(2);
 
     const exitT = exitTime
-      ? (() => { const d = new Date(exitTime); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; })()
+      ? new Date(exitTime).toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
       : null;
 
     results.push({
