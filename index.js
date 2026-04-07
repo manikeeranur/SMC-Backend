@@ -13,6 +13,7 @@ const watchlistRoutes   = require("./src/routes/watchlist");
 const smcRoutes         = require("./src/routes/smc");
 const autoTradeRoutes   = require("./src/routes/autoTrade");
 const resultsRoutes     = require("./src/routes/results");
+const accountRoutes     = require("./src/routes/account");
 const { stopTicker, subscribeTokens } = require("./src/websocket/ticker");
 const { isAuthenticated } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
@@ -33,6 +34,7 @@ app.use("/api/watchlist", watchlistRoutes);
 app.use("/api/smc", smcRoutes);
 app.use("/api/auto-trade", autoTradeRoutes);
 app.use("/api/results", resultsRoutes);
+app.use("/api/account", accountRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
