@@ -44,14 +44,15 @@ async function executeEntry(alert) {
   try {
     // 1. Market BUY
     const entryResp = await getClient().placeOrder("regular", {
-      exchange:         EXCHANGE,
-      tradingsymbol:    sym,
-      transaction_type: "BUY",
-      quantity:         LOT_SIZE,
-      product:          PRODUCT,
-      order_type:       "MARKET",
-      validity:         "DAY",
-      tag:              "ALGO_ENTRY",
+      exchange:          EXCHANGE,
+      tradingsymbol:     sym,
+      transaction_type:  "BUY",
+      quantity:          LOT_SIZE,
+      product:           PRODUCT,
+      order_type:        "MARKET",
+      validity:          "DAY",
+      market_protection: true,
+      tag:               "ALGO_ENTRY",
     });
     pos.entryOrderId = entryResp.order_id;
     pos.status = "ENTRY_PLACED";
@@ -108,14 +109,15 @@ async function executeExit(alert) {
 
     // Place MARKET SELL to exit
     const exitResp = await getClient().placeOrder("regular", {
-      exchange:         EXCHANGE,
-      tradingsymbol:    pos.tradingsymbol,
-      transaction_type: "SELL",
-      quantity:         LOT_SIZE,
-      product:          PRODUCT,
-      order_type:       "MARKET",
-      validity:         "DAY",
-      tag:              "ALGO_EXIT",
+      exchange:          EXCHANGE,
+      tradingsymbol:     pos.tradingsymbol,
+      transaction_type:  "SELL",
+      quantity:          LOT_SIZE,
+      product:           PRODUCT,
+      order_type:        "MARKET",
+      validity:          "DAY",
+      market_protection: true,
+      tag:               "ALGO_EXIT",
     });
     pos.exitOrderId = exitResp.order_id;
     pos.status = `EXITED_${alert.status}`;
