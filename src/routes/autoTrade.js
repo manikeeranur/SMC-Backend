@@ -123,12 +123,26 @@ async function executeExit(alert) {
 
   try {
     // Cancel the pending SL order — by stored ID if available, else search Kite orders
+    let slAlreadyExecuted = false;
+
     if (pos?.slOrderId) {
       try {
         await getClient().cancelOrder("regular", pos.slOrderId);
         log(pos.alertId, `SL order cancelled [${pos.slOrderId}]`);
       } catch (e) {
-        log(pos.alertId, `SL cancel warning — ${e.message} (may already be executed)`);
+        // Cancel failed — check if SL-M already executed (position closed by Kite)
+        try {
+          const history = await getClient().getOrderHistory(pos.slOrderId);
+          const lastStatus = history?.[history.length - 1]?.status;
+          if (lastStatus === "COMPLETE") {
+            slAlreadyExecuted = true;
+            log(pos.alertId, `SL-M already executed — skipping MARKET SELL [${pos.slOrderId}]`);
+          } else {
+            log(pos.alertId, `SL cancel warning — ${e.message} (status: ${lastStatus})`);
+          }
+        } catch {
+          log(pos.alertId, `SL cancel warning — ${e.message} (may already be executed)`);
+        }
       }
     } else {
       // Post-restart: no slOrderId — find and cancel any open SL-M for this symbol
@@ -140,6 +154,19 @@ async function executeExit(alert) {
           o.transaction_type === "SELL" &&
           (o.status === "TRIGGER PENDING" || o.status === "OPEN")
         );
+        // If no open SL-M found, check if one already completed (position closed by Kite)
+        if (!openSLMs.length) {
+          const completedSLM = allOrders.find(o =>
+            o.tradingsymbol    === tradingsymbol &&
+            o.order_type       === "SL-M" &&
+            o.transaction_type === "SELL" &&
+            o.status           === "COMPLETE"
+          );
+          if (completedSLM) {
+            slAlreadyExecuted = true;
+            console.log(`[AutoTrade] SL-M already executed — skipping MARKET SELL for ${tradingsymbol} [${completedSLM.order_id}]`);
+          }
+        }
         for (const o of openSLMs) {
           await getClient().cancelOrder(o.variety || "regular", o.order_id)
             .catch(e => console.warn(`[AutoTrade] SL-M cancel warn [${o.order_id}] — ${e.message}`));
@@ -148,6 +175,16 @@ async function executeExit(alert) {
       } catch (e) {
         console.warn(`[AutoTrade] Could not query orders for SL-M cancel — ${e.message}`);
       }
+    }
+
+    // If SL-M already executed, position is closed by Kite — no MARKET SELL needed
+    if (slAlreadyExecuted) {
+      if (pos) {
+        pos.status = `EXITED_${alert.status}`;
+        log(pos.alertId, `Position already closed by SL-M — marked ${pos.status}`);
+        sendAutoTradeOrder(pos, "EXIT");
+      }
+      return;
     }
 
     // Place MARKET SELL to exit
