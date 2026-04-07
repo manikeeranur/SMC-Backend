@@ -124,6 +124,51 @@ schedule.scheduleJob({ rule: "30 15 * * 1-5", tz: "Asia/Kolkata" }, () => {
   sendSessionClose();
 });
 
+// ─── 15:20 IST — Safety-net square-off (cancel SL-M + exit all open NFO MIS) ──
+schedule.scheduleJob({ rule: "20 15 * * 1-5", tz: "Asia/Kolkata" }, async () => {
+  if (!isAuthenticated()) return;
+  console.log("[EOD] 15:20 square-off triggered");
+  const { getClient } = require("./src/config/kite");
+  const { EXCHANGE, PRODUCT } = require("./src/config/constants");
+  try {
+    // 1. Cancel all open SL-M orders in NFO
+    const allOrders = await getClient().getOrders().catch(() => []);
+    const openSLMs  = allOrders.filter(o =>
+      o.exchange         === EXCHANGE &&
+      o.order_type       === "SL-M" &&
+      o.transaction_type === "SELL" &&
+      (o.status === "TRIGGER PENDING" || o.status === "OPEN")
+    );
+    for (const o of openSLMs) {
+      await getClient().cancelOrder(o.variety || "regular", o.order_id)
+        .catch(e => console.warn(`[EOD] SL-M cancel warn [${o.order_id}] — ${e.message}`));
+      console.log(`[EOD] Cancelled SL-M [${o.order_id}] ${o.tradingsymbol}`);
+    }
+
+    // 2. Exit all open MIS long positions in NFO
+    const { net } = await getClient().getPositions();
+    const openLongs = (net || []).filter(p =>
+      p.exchange === EXCHANGE && p.product === PRODUCT && p.quantity > 0
+    );
+    for (const p of openLongs) {
+      await getClient().placeOrder("regular", {
+        exchange:          EXCHANGE,
+        tradingsymbol:     p.tradingsymbol,
+        transaction_type:  "SELL",
+        quantity:          p.quantity,
+        product:           PRODUCT,
+        order_type:        "MARKET",
+        validity:          "DAY",
+        market_protection: 1,
+        tag:               "EOD_EXIT",
+      }).catch(e => console.error(`[EOD] Exit failed ${p.tradingsymbol} — ${e.message}`));
+      console.log(`[EOD] Exited ${p.tradingsymbol} qty=${p.quantity}`);
+    }
+  } catch (err) {
+    console.error("[EOD] Square-off error:", err.message);
+  }
+});
+
 // ─── Session summary at 15:21 IST ─────────────────────────────────────────────
 schedule.scheduleJob({ rule: "21 15 * * 1-5", tz: "Asia/Kolkata" }, async () => {
   try {

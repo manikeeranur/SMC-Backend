@@ -1,11 +1,12 @@
 const mongoose = require("mongoose");
 
 const AlertSchema = new mongoose.Schema({
-  alertId:    { type: String, required: true, unique: true }, // a.id
-  date:       { type: String, required: true },               // IST date YYYY-MM-DD
-  direction:  String,
-  strike:     Number,
-  expiry:     String,
+  alertId:       { type: String, required: true, unique: true }, // a.id
+  date:          { type: String, required: true },               // IST date YYYY-MM-DD
+  tradingsymbol: String,                                         // leg.tradingsymbol for exit
+  direction:     String,
+  strike:        Number,
+  expiry:        String,
   entryTime:  String,
   exitTime:   String,
   spot:       Number,

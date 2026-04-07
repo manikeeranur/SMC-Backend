@@ -75,8 +75,10 @@ async function doScan(expiry) {
     await refreshActivePnL(expiry);
 
     // 2a. Gate: no new entry while a position is already ACTIVE
-    const hasOpen = alerts.some(a => a.status === "ACTIVE");
-    if (hasOpen) {
+    // Also check autoTrade in-memory positions (catches post-restart state)
+    const hasOpenAlert = alerts.some(a => a.status === "ACTIVE");
+    const hasOpenTrade = autoTrade.getPositions().some(p => p.status === "ACTIVE" || p.status === "ENTRY_PLACED" || p.status === "EXITING");
+    if (hasOpenAlert || hasOpenTrade) {
       console.log("[SMC] Skipping — open position exists, wait for exit");
       return;
     }
@@ -179,6 +181,8 @@ router.get("/alerts", async (req, res) => {
             pnlPct: d.pnlPct ?? 0, peakMove: d.peakMove ?? 0,
             t1Hit: d.t1Hit, t1HitTime: d.t1HitTime,
             lastLtp: d.lastLtp, createdAt: d.createdAt,
+            tradingsymbol: d.tradingsymbol ?? null,
+            leg: d.tradingsymbol ? { tradingsymbol: d.tradingsymbol, strike: d.strike, type: d.direction } : undefined,
           }));
           alerts = [...alerts, ...restored];
           if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS;

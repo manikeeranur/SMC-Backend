@@ -14,11 +14,12 @@ async function saveAlert(alert) {
       { alertId: alert.id },
       {
         $set: {
-          alertId:    alert.id,
+          alertId:       alert.id,
           date,
-          direction:  alert.direction,
-          strike:     alert.strike,
-          expiry:     alert.expiry,
+          tradingsymbol: alert.leg?.tradingsymbol ?? alert.tradingsymbol ?? null,
+          direction:     alert.direction,
+          strike:        alert.strike,
+          expiry:        alert.expiry,
           entryTime:  alert.entryTime,
           exitTime:   alert.exitTime ?? null,
           spot:       alert.spot,

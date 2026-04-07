@@ -25,6 +25,26 @@ async function executeEntry(alert) {
   const { id: alertId, leg, rr } = alert;
   if (!leg?.tradingsymbol) { console.warn("[AutoTrade] No tradingsymbol on leg — skipping"); return; }
 
+  // ── Dedup guard: never place two orders for the same alertId ─────────────────
+  if (positions.some(p => p.alertId === alertId)) {
+    console.warn(`[AutoTrade] Duplicate entry blocked — ${alertId} already tracked`);
+    return;
+  }
+
+  // ── Kite position guard: check if we already hold this symbol ────────────────
+  try {
+    const { net } = await getClient().getPositions();
+    const already = (net || []).some(
+      p => p.tradingsymbol === leg.tradingsymbol && Math.abs(p.quantity) > 0
+    );
+    if (already) {
+      console.warn(`[AutoTrade] Entry blocked — open Kite position already exists for ${leg.tradingsymbol}`);
+      return;
+    }
+  } catch (e) {
+    console.warn(`[AutoTrade] Could not check Kite positions — ${e.message}. Proceeding.`);
+  }
+
   const sym = leg.tradingsymbol;
 
   const pos = {
@@ -88,30 +108,52 @@ async function executeExit(alert) {
   if (!isAuthenticated()) return;
 
   const pos = positions.find(p => p.alertId === alert.id && p.status === "ACTIVE");
-  if (!pos) return;  // not tracked or already exited
 
-  // If SL hit by Kite itself — just mark exited (no need to place another sell)
-  if (alert.status === "SL") {
-    pos.status = "EXITED_SL";
-    log(pos.alertId, `SL hit — Kite SL-M order already executed`);
+  // Resolve tradingsymbol — from memory, alert.leg, or alert.tradingsymbol (MongoDB restored)
+  const tradingsymbol = pos?.tradingsymbol
+    ?? alert.leg?.tradingsymbol
+    ?? alert.tradingsymbol;
+  if (!tradingsymbol) {
+    console.warn(`[AutoTrade] Exit skipped — no tradingsymbol for ${alert.id}`);
     return;
   }
 
+  // Mark pos early to prevent double-exit if executeExit fires twice
+  if (pos) pos.status = "EXITING";
+
   try {
-    // Cancel the pending SL order
-    if (pos.slOrderId) {
+    // Cancel the pending SL order — by stored ID if available, else search Kite orders
+    if (pos?.slOrderId) {
       try {
         await getClient().cancelOrder("regular", pos.slOrderId);
         log(pos.alertId, `SL order cancelled [${pos.slOrderId}]`);
       } catch (e) {
         log(pos.alertId, `SL cancel warning — ${e.message} (may already be executed)`);
       }
+    } else {
+      // Post-restart: no slOrderId — find and cancel any open SL-M for this symbol
+      try {
+        const allOrders = await getClient().getOrders();
+        const openSLMs  = allOrders.filter(o =>
+          o.tradingsymbol    === tradingsymbol &&
+          o.order_type       === "SL-M" &&
+          o.transaction_type === "SELL" &&
+          (o.status === "TRIGGER PENDING" || o.status === "OPEN")
+        );
+        for (const o of openSLMs) {
+          await getClient().cancelOrder(o.variety || "regular", o.order_id)
+            .catch(e => console.warn(`[AutoTrade] SL-M cancel warn [${o.order_id}] — ${e.message}`));
+          console.log(`[AutoTrade] Cancelled open SL-M [${o.order_id}] for ${tradingsymbol}`);
+        }
+      } catch (e) {
+        console.warn(`[AutoTrade] Could not query orders for SL-M cancel — ${e.message}`);
+      }
     }
 
     // Place MARKET SELL to exit
     const exitResp = await getClient().placeOrder("regular", {
       exchange:          EXCHANGE,
-      tradingsymbol:     pos.tradingsymbol,
+      tradingsymbol,
       transaction_type:  "SELL",
       quantity:          LOT_SIZE,
       product:           PRODUCT,
@@ -120,13 +162,23 @@ async function executeExit(alert) {
       market_protection: 1,
       tag:               "ALGO_EXIT",
     });
-    pos.exitOrderId = exitResp.order_id;
-    pos.status = `EXITED_${alert.status}`;
-    log(pos.alertId, `Exit order placed — ${alert.status}  [order_id: ${exitResp.order_id}]`);
-    sendAutoTradeOrder(pos, "EXIT");
+
+    if (pos) {
+      pos.exitOrderId = exitResp.order_id;
+      pos.status = `EXITED_${alert.status}`;
+      log(pos.alertId, `Exit order placed — ${alert.status}  [order_id: ${exitResp.order_id}]`);
+      sendAutoTradeOrder(pos, "EXIT");
+    } else {
+      console.log(`[AutoTrade] Exit order placed (post-restart) — ${tradingsymbol} ${alert.status}  [order_id: ${exitResp.order_id}]`);
+    }
 
   } catch (err) {
-    log(pos.alertId, `Exit failed — ${err.message}`);
+    if (pos) {
+      pos.status = "ERROR";
+      log(pos.alertId, `Exit failed — ${err.message}`);
+    } else {
+      console.error(`[AutoTrade] Exit failed (post-restart) — ${tradingsymbol}: ${err.message}`);
+    }
   }
 }
 
@@ -159,7 +211,8 @@ router.delete("/positions", (req, res) => {
   res.json({ cleared: true });
 });
 
-module.exports        = router;
+module.exports             = router;
 module.exports.executeEntry = executeEntry;
 module.exports.executeExit  = executeExit;
 module.exports.isEnabled    = () => enabled;
+module.exports.getPositions = () => positions;
