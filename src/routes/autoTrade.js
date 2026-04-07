@@ -60,15 +60,16 @@ async function executeEntry(alert) {
 
     // 2. SL-M SELL at rr.sl
     const slResp = await getClient().placeOrder("regular", {
-      exchange:         EXCHANGE,
-      tradingsymbol:    sym,
-      transaction_type: "SELL",
-      quantity:         LOT_SIZE,
-      product:          PRODUCT,
-      order_type:       "SL-M",
-      trigger_price:    rr.sl,
-      validity:         "DAY",
-      tag:              "ALGO_SL",
+      exchange:          EXCHANGE,
+      tradingsymbol:     sym,
+      transaction_type:  "SELL",
+      quantity:          LOT_SIZE,
+      product:           PRODUCT,
+      order_type:        "SL-M",
+      trigger_price:     rr.sl,
+      validity:          "DAY",
+      market_protection: 1,
+      tag:               "ALGO_SL",
     });
     pos.slOrderId = slResp.order_id;
     pos.status = "ACTIVE";
