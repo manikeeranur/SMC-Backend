@@ -51,7 +51,7 @@ async function executeEntry(alert) {
       product:           PRODUCT,
       order_type:        "MARKET",
       validity:          "DAY",
-      market_protection: true,
+      market_protection: 1,
       tag:               "ALGO_ENTRY",
     });
     pos.entryOrderId = entryResp.order_id;
@@ -116,7 +116,7 @@ async function executeExit(alert) {
       product:           PRODUCT,
       order_type:        "MARKET",
       validity:          "DAY",
-      market_protection: true,
+      market_protection: 1,
       tag:               "ALGO_EXIT",
     });
     pos.exitOrderId = exitResp.order_id;
