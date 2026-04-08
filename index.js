@@ -14,6 +14,7 @@ const smcRoutes         = require("./src/routes/smc");
 const autoTradeRoutes   = require("./src/routes/autoTrade");
 const resultsRoutes     = require("./src/routes/results");
 const accountRoutes     = require("./src/routes/account");
+const { eodSnapshot }   = require("./src/routes/account");
 const { stopTicker, subscribeTokens } = require("./src/websocket/ticker");
 const { isAuthenticated } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
@@ -169,6 +170,11 @@ schedule.scheduleJob({ rule: "20 15 * * 1-5", tz: "Asia/Kolkata" }, async () => 
   } catch (err) {
     console.error("[EOD] Square-off error:", err.message);
   }
+});
+
+// ─── 15:31 IST — Save final EOD P&L snapshot ─────────────────────────────────
+schedule.scheduleJob({ rule: "31 15 * * 1-5", tz: "Asia/Kolkata" }, () => {
+  eodSnapshot();
 });
 
 // ─── Session summary at 15:21 IST ─────────────────────────────────────────────
