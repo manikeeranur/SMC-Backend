@@ -6,6 +6,10 @@ const { getClient, isAuthenticated } = require("../config/kite");
 const autoTrade = require("./autoTrade");
 const DailyPnL  = require("../models/DailyPnL");
 const { isConnected } = require("../config/db");
+const { EXCHANGE, PRODUCT } = require("../config/constants");
+
+// NFO (NIFTY/BANKNIFTY) + BFO (SENSEX) — both F&O segments we trade
+const FNO_EXCHANGES = ["NFO", "BFO"];
 
 // ─── IST date YYYY-MM-DD ─────────────────────────────────────────────────────
 function todayIST() {
@@ -43,8 +47,8 @@ function toISTTime(ts) {
 async function fetchKiteCharges(client, orders) {
   const empty = { brokerage: 0, stt: 0, exchange: 0, sebi: 0, gst: 0, stampDuty: 0, total: 0 };
 
-  // Only include completed NFO orders
-  const completed = orders.filter(o => o.status === "COMPLETE" && o.exchange === "NFO");
+  // Only include completed F&O orders (NFO = NIFTY/BNIFTY, BFO = SENSEX)
+  const completed = orders.filter(o => o.status === "COMPLETE" && FNO_EXCHANGES.includes(o.exchange));
   if (!completed.length) return empty;
 
   // Build input for getvirtualContractNote
@@ -94,6 +98,85 @@ async function fetchKiteCharges(client, orders) {
   }
 }
 
+// ─── FIFO position builder (shared by full account + lightweight /positions) ──
+function buildPositionsFromData(dayPositions, trades) {
+  const atPositions = autoTrade.getPositions();
+
+  const orderMap = {};
+  for (const t of trades) {
+    if (!FNO_EXCHANGES.includes(t.exchange)) continue;
+    const id = t.order_id;
+    if (!orderMap[id]) {
+      orderMap[id] = {
+        order_id: id, tradingsymbol: t.tradingsymbol,
+        transaction_type: t.transaction_type,
+        totalQty: 0, totalValue: 0, timestamp: null,
+      };
+    }
+    const fillPrice = t.average_price || t.price || 0;
+    orderMap[id].totalQty   += t.quantity;
+    orderMap[id].totalValue += t.quantity * fillPrice;
+    const ts = t.fill_timestamp || t.exchange_timestamp || t.order_timestamp;
+    if (ts && !orderMap[id].timestamp) orderMap[id].timestamp = ts;
+  }
+
+  const symbolOrders = {};
+  for (const o of Object.values(orderMap)) {
+    const sym = o.tradingsymbol;
+    if (!symbolOrders[sym]) symbolOrders[sym] = { buys: [], sells: [] };
+    const rec = {
+      quantity: o.totalQty,
+      price:    o.totalValue / o.totalQty,
+      time:     toISTTime(o.timestamp),
+      ts:       o.timestamp ? new Date(o.timestamp).getTime() : 0,
+    };
+    if (o.transaction_type === "BUY") symbolOrders[sym].buys.push(rec);
+    else                               symbolOrders[sym].sells.push(rec);
+  }
+  for (const s of Object.values(symbolOrders)) {
+    s.buys.sort((a, b) => a.ts - b.ts);
+    s.sells.sort((a, b) => a.ts - b.ts);
+  }
+
+  const positions = [];
+  for (const [sym, { buys, sells }] of Object.entries(symbolOrders)) {
+    const kitePos      = dayPositions.find(p => p.tradingsymbol === sym);
+    const currentPrice = +(kitePos?.last_price || 0).toFixed(2);
+    const at           = atPositions.find(a => a.tradingsymbol === sym);
+    const direction    = at?.direction ?? (sym.endsWith("CE") ? "CE" : "PE");
+    const strike       = at?.strike ?? null;
+
+    buys.forEach((buy, i) => {
+      const sell         = sells[i] ?? null;
+      const isOpen       = !sell;
+      const sellPrice    = sell ? +sell.price.toFixed(2) : 0;
+      const pnlVal       = isOpen
+        ? +((currentPrice - buy.price) * buy.quantity).toFixed(2)
+        : +((sell.price   - buy.price) * buy.quantity).toFixed(2);
+      const exitTs       = sell?.ts ?? Date.now();
+      const durationSecs = buy.ts > 0 ? Math.floor((exitTs - buy.ts) / 1000) : null;
+
+      positions.push({
+        tradingsymbol: sym, direction, strike,
+        quantity:  buy.quantity,
+        buyPrice:  +buy.price.toFixed(2),
+        sellPrice, currentPrice,
+        pnl:       pnlVal,
+        status:    isOpen ? "OPEN" : "CLOSED",
+        atStatus:  at?.status ?? null,
+        entryTime: buy.time,
+        exitTime:  sell?.time ?? null,
+        durationSecs,
+        _ts:       buy.ts,
+      });
+    });
+  }
+
+  positions.sort((a, b) => a._ts - b._ts);
+  for (const p of positions) delete p._ts;
+  return positions;
+}
+
 // ─── Build today's account data from Kite ────────────────────────────────────
 async function buildAccountData() {
   const client = getClient();
@@ -128,84 +211,7 @@ async function buildAccountData() {
     total:      +(realisedPnL + unrealisedPnL).toFixed(2),
   };
 
-  // ── Per-order records from fills ─────────────────────────────────────────────
-  const orderMap = {};
-  for (const t of trades) {
-    if (t.exchange !== "NFO") continue;
-    const id = t.order_id;
-    if (!orderMap[id]) {
-      orderMap[id] = {
-        order_id: id, tradingsymbol: t.tradingsymbol,
-        transaction_type: t.transaction_type,
-        totalQty: 0, totalValue: 0, timestamp: null,
-      };
-    }
-    const fillPrice = t.average_price || t.price || 0;
-    orderMap[id].totalQty   += t.quantity;
-    orderMap[id].totalValue += t.quantity * fillPrice;
-    const ts = t.fill_timestamp || t.exchange_timestamp || t.order_timestamp;
-    if (ts && !orderMap[id].timestamp) orderMap[id].timestamp = ts;
-  }
-
-  const symbolOrders = {};
-  for (const o of Object.values(orderMap)) {
-    const sym = o.tradingsymbol;
-    if (!symbolOrders[sym]) symbolOrders[sym] = { buys: [], sells: [] };
-    const rec = {
-      order_id: o.order_id,
-      quantity: o.totalQty,
-      price:    o.totalValue / o.totalQty,
-      time:     toISTTime(o.timestamp),
-      ts:       o.timestamp ? new Date(o.timestamp).getTime() : 0,
-    };
-    if (o.transaction_type === "BUY") symbolOrders[sym].buys.push(rec);
-    else                               symbolOrders[sym].sells.push(rec);
-  }
-  for (const s of Object.values(symbolOrders)) {
-    s.buys.sort((a, b) => a.ts - b.ts);
-    s.sells.sort((a, b) => a.ts - b.ts);
-  }
-
-  // ── FIFO match ───────────────────────────────────────────────────────────────
-  const atPositions = autoTrade.getPositions();
-  const positions   = [];
-  for (const [sym, { buys, sells }] of Object.entries(symbolOrders)) {
-    const kitePos      = dayPositions.find(p => p.tradingsymbol === sym);
-    const currentPrice = +(kitePos?.last_price || 0).toFixed(2);
-    const at           = atPositions.find(a => a.tradingsymbol === sym);
-    const direction    = at?.direction ?? (sym.endsWith("CE") ? "CE" : "PE");
-    const strike       = at?.strike ?? null;
-
-    buys.forEach((buy, i) => {
-      const sell      = sells[i] ?? null;
-      const isOpen    = !sell;
-      const sellPrice = sell ? +sell.price.toFixed(2) : 0;
-      const pnlVal    = isOpen
-        ? +((currentPrice - buy.price) * buy.quantity).toFixed(2)
-        : +((sell.price   - buy.price) * buy.quantity).toFixed(2);
-
-      const exitTs      = sell?.ts ?? Date.now();
-      const durationSecs = buy.ts > 0 ? Math.floor((exitTs - buy.ts) / 1000) : null;
-
-      positions.push({
-        tradingsymbol: sym, direction, strike,
-        quantity:  buy.quantity,
-        buyPrice:  +buy.price.toFixed(2),
-        sellPrice, currentPrice,
-        pnl:       pnlVal,
-        status:    isOpen ? "OPEN" : "CLOSED",
-        atStatus:  at?.status ?? null,
-        entryTime: buy.time,
-        exitTime:  sell?.time ?? null,
-        durationSecs,
-        _ts:       buy.ts,
-      });
-    });
-  }
-
-  // ── Sort positions by entry time (oldest first) ───────────────────────────────
-  positions.sort((a, b) => a._ts - b._ts);
-  for (const p of positions) delete p._ts;
+  const positions = buildPositionsFromData(dayPositions, trades);
 
   // ── Stats ────────────────────────────────────────────────────────────────────
   const closedPos = positions.filter(p => p.status === "CLOSED");
@@ -222,7 +228,7 @@ async function buildAccountData() {
 
   // ── Order book — sorted by time ascending (chronological) ───────────────────
   const orderBook = orders
-    .filter(o => o.exchange === "NFO")
+    .filter(o => FNO_EXCHANGES.includes(o.exchange))
     .map(o => {
       const rawTs = o.exchange_update_timestamp || o.order_timestamp || o.exchange_timestamp;
       return {
@@ -253,6 +259,122 @@ router.get("/", async (_req, res) => {
     res.json(data);
   } catch (err) {
     console.error("[Account] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/account/positions — lightweight 1-second live refresh ──────────
+router.get("/positions", async (_req, res) => {
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  try {
+    const client = getClient();
+    const [positionsData, trades] = await Promise.all([
+      client.getPositions().catch(() => ({ day: [], net: [] })),
+      client.getTrades().catch(() => []),
+    ]);
+    const positions = buildPositionsFromData(positionsData.day || [], trades);
+    res.json({ positions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/account/exit — manually exit a single open position ────────────
+router.post("/exit", async (req, res) => {
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  const { tradingsymbol, quantity } = req.body;
+  if (!tradingsymbol || !quantity) {
+    return res.status(400).json({ error: "tradingsymbol and quantity are required" });
+  }
+  const client = getClient();
+  try {
+    // Cancel any open SL orders for this symbol
+    const allOrders = await client.getOrders().catch(() => []);
+    const openSLs = allOrders.filter(o =>
+      o.tradingsymbol    === tradingsymbol &&
+      (o.order_type === "SL-M" || o.order_type === "SL") &&
+      o.transaction_type === "SELL" &&
+      (o.status === "TRIGGER PENDING" || o.status === "OPEN")
+    );
+    for (const o of openSLs) {
+      await client.cancelOrder(o.variety || "regular", o.order_id)
+        .catch(e => console.warn(`[Account/Exit] SL cancel [${o.order_id}] — ${e.message}`));
+    }
+    // Detect the correct exchange from order history (BFO for SENSEX, NFO otherwise)
+    const refOrder = allOrders.find(o => o.tradingsymbol === tradingsymbol);
+    const exch     = FNO_EXCHANGES.includes(refOrder?.exchange) ? refOrder.exchange : EXCHANGE;
+    // Place MARKET SELL
+    const exitResp = await client.placeOrder("regular", {
+      exchange:          exch,
+      tradingsymbol,
+      transaction_type:  "SELL",
+      quantity,
+      product:           PRODUCT,
+      order_type:        "MARKET",
+      validity:          "DAY",
+      market_protection: 1,
+      tag:               "MANUAL_EXIT",
+    });
+    console.log(`[Account/Exit] Manual exit — ${tradingsymbol} × ${quantity}  [order_id: ${exitResp.order_id}]`);
+    res.json({ order_id: exitResp.order_id, tradingsymbol, quantity });
+  } catch (err) {
+    console.error("[Account/Exit] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/account/exit-all — exit ALL open positions ────────────────────
+router.post("/exit-all", async (req, res) => {
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  const client = getClient();
+  try {
+    const [positionsData, trades, allOrders] = await Promise.all([
+      client.getPositions().catch(() => ({ day: [], net: [] })),
+      client.getTrades().catch(() => []),
+      client.getOrders().catch(() => []),
+    ]);
+    const positions    = buildPositionsFromData(positionsData.day || [], trades);
+    const openPositions = positions.filter(p => p.status === "OPEN");
+    if (!openPositions.length) return res.json({ exited: [], message: "No open positions" });
+
+    const results = [];
+    for (const pos of openPositions) {
+      try {
+        // Detect exchange from order history
+        const refOrder = allOrders.find(o => o.tradingsymbol === pos.tradingsymbol);
+        const exch     = FNO_EXCHANGES.includes(refOrder?.exchange) ? refOrder.exchange : EXCHANGE;
+        // Cancel open SL orders
+        const openSLs = allOrders.filter(o =>
+          o.tradingsymbol    === pos.tradingsymbol &&
+          (o.order_type === "SL-M" || o.order_type === "SL") &&
+          o.transaction_type === "SELL" &&
+          (o.status === "TRIGGER PENDING" || o.status === "OPEN")
+        );
+        for (const o of openSLs) {
+          await client.cancelOrder(o.variety || "regular", o.order_id)
+            .catch(e => console.warn(`[Account/ExitAll] SL cancel [${o.order_id}] — ${e.message}`));
+        }
+        const exitResp = await client.placeOrder("regular", {
+          exchange:          exch,
+          tradingsymbol:     pos.tradingsymbol,
+          transaction_type:  "SELL",
+          quantity:          pos.quantity,
+          product:           PRODUCT,
+          order_type:        "MARKET",
+          validity:          "DAY",
+          market_protection: 1,
+          tag:               "MANUAL_EXIT_ALL",
+        });
+        console.log(`[Account/ExitAll] Exited ${pos.tradingsymbol} × ${pos.quantity}  [order_id: ${exitResp.order_id}]`);
+        results.push({ tradingsymbol: pos.tradingsymbol, order_id: exitResp.order_id, ok: true });
+      } catch (err) {
+        console.error(`[Account/ExitAll] Failed ${pos.tradingsymbol}:`, err.message);
+        results.push({ tradingsymbol: pos.tradingsymbol, error: err.message, ok: false });
+      }
+    }
+    res.json({ exited: results });
+  } catch (err) {
+    console.error("[Account/ExitAll] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
