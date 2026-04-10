@@ -98,10 +98,12 @@ async function fetchKiteCharges(client, orders) {
   }
 }
 
-// ─── FIFO position builder (shared by full account + lightweight /positions) ──
-function buildPositionsFromData(dayPositions, trades) {
+// ─── FIFO position builder — uses getQuote() for real-time LTP ───────────────
+// getPositions().last_price is stale (REST snapshot); getQuote() gives live LTP
+async function buildPositionsFromData(client, dayPositions, trades) {
   const atPositions = autoTrade.getPositions();
 
+  // Build per-order fill summary, storing exchange per order
   const orderMap = {};
   for (const t of trades) {
     if (!FNO_EXCHANGES.includes(t.exchange)) continue;
@@ -109,6 +111,7 @@ function buildPositionsFromData(dayPositions, trades) {
     if (!orderMap[id]) {
       orderMap[id] = {
         order_id: id, tradingsymbol: t.tradingsymbol,
+        exchange: t.exchange,
         transaction_type: t.transaction_type,
         totalQty: 0, totalValue: 0, timestamp: null,
       };
@@ -123,7 +126,7 @@ function buildPositionsFromData(dayPositions, trades) {
   const symbolOrders = {};
   for (const o of Object.values(orderMap)) {
     const sym = o.tradingsymbol;
-    if (!symbolOrders[sym]) symbolOrders[sym] = { buys: [], sells: [] };
+    if (!symbolOrders[sym]) symbolOrders[sym] = { buys: [], sells: [], exchange: o.exchange };
     const rec = {
       quantity: o.totalQty,
       price:    o.totalValue / o.totalQty,
@@ -138,21 +141,60 @@ function buildPositionsFromData(dayPositions, trades) {
     s.sells.sort((a, b) => a.ts - b.ts);
   }
 
+  // ── Fetch real-time quotes for all open positions via getQuote() ─────────────
+  // getPositions().last_price is a stale REST snapshot; getQuote() = live LTP
+  const openKeys = Object.entries(symbolOrders)
+    .filter(([, { buys, sells }]) => buys.length > sells.length)
+    .map(([sym, { exchange }]) => `${exchange}:${sym}`);
+
+  let quoteMap = {};
+  if (openKeys.length > 0) {
+    try {
+      quoteMap = await client.getQuote(openKeys);
+    } catch (e) {
+      console.warn("[Account] getQuote failed — falling back to last_price:", e.message);
+    }
+  }
+
+  // ── FIFO match ────────────────────────────────────────────────────────────────
   const positions = [];
-  for (const [sym, { buys, sells }] of Object.entries(symbolOrders)) {
-    const kitePos      = dayPositions.find(p => p.tradingsymbol === sym);
-    const currentPrice = +(kitePos?.last_price || 0).toFixed(2);
-    const at           = atPositions.find(a => a.tradingsymbol === sym);
-    const direction    = at?.direction ?? (sym.endsWith("CE") ? "CE" : "PE");
-    const strike       = at?.strike ?? null;
+  for (const [sym, { buys, sells, exchange }] of Object.entries(symbolOrders)) {
+    const kitePos  = dayPositions.find(p => p.tradingsymbol === sym);
+    const quoteKey = `${exchange}:${sym}`;
+
+    // Live LTP: getQuote() first, fall back to positions last_price
+    const liveLTP      = quoteMap[quoteKey]?.last_price;
+    const currentPrice = +(liveLTP || kitePos?.last_price || 0).toFixed(2);
+
+    const at        = atPositions.find(a => a.tradingsymbol === sym);
+    const direction = at?.direction ?? (sym.endsWith("CE") ? "CE" : "PE");
+    const strike    = at?.strike ?? null;
+
+    // Total open qty for this symbol (used to distribute kitePos.unrealised fairly)
+    const openTotalQty = buys
+      .filter((_, i) => !sells[i])
+      .reduce((s, b) => s + b.quantity, 0) || 1;
 
     buys.forEach((buy, i) => {
       const sell         = sells[i] ?? null;
       const isOpen       = !sell;
       const sellPrice    = sell ? +sell.price.toFixed(2) : 0;
-      const pnlVal       = isOpen
-        ? +((currentPrice - buy.price) * buy.quantity).toFixed(2)
-        : +((sell.price   - buy.price) * buy.quantity).toFixed(2);
+
+      let pnlVal;
+      if (isOpen) {
+        if (currentPrice > 0) {
+          // Real-time P&L from live quote
+          pnlVal = +((currentPrice - buy.price) * buy.quantity).toFixed(2);
+        } else if (kitePos?.unrealised != null) {
+          // Fallback: distribute Kite's unrealised proportionally across open trades
+          pnlVal = +(kitePos.unrealised * buy.quantity / openTotalQty).toFixed(2);
+        } else {
+          pnlVal = 0;
+        }
+      } else {
+        pnlVal = +((sell.price - buy.price) * buy.quantity).toFixed(2);
+      }
+
       const exitTs       = sell?.ts ?? Date.now();
       const durationSecs = buy.ts > 0 ? Math.floor((exitTs - buy.ts) / 1000) : null;
 
@@ -211,7 +253,7 @@ async function buildAccountData() {
     total:      +(realisedPnL + unrealisedPnL).toFixed(2),
   };
 
-  const positions = buildPositionsFromData(dayPositions, trades);
+  const positions = await buildPositionsFromData(client, dayPositions, trades);
 
   // ── Stats ────────────────────────────────────────────────────────────────────
   const closedPos = positions.filter(p => p.status === "CLOSED");
@@ -272,7 +314,7 @@ router.get("/positions", async (_req, res) => {
       client.getPositions().catch(() => ({ day: [], net: [] })),
       client.getTrades().catch(() => []),
     ]);
-    const positions = buildPositionsFromData(positionsData.day || [], trades);
+    const positions = await buildPositionsFromData(client, positionsData.day || [], trades);
     res.json({ positions });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -333,7 +375,7 @@ router.post("/exit-all", async (req, res) => {
       client.getTrades().catch(() => []),
       client.getOrders().catch(() => []),
     ]);
-    const positions    = buildPositionsFromData(positionsData.day || [], trades);
+    const positions    = await buildPositionsFromData(client, positionsData.day || [], trades);
     const openPositions = positions.filter(p => p.status === "OPEN");
     if (!openPositions.length) return res.json({ exited: [], message: "No open positions" });
 
