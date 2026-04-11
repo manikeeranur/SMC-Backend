@@ -79,6 +79,23 @@ router.get("/token-value", (req, res) => {
   res.json({ access_token: token });
 });
 
+// GET /api/auth/profile  →  Kite user profile (name, id, avatar)
+router.get("/profile", async (req, res) => {
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  try {
+    const p = await getClient().getProfile();
+    res.json({
+      user_id:    p.user_id,
+      user_name:  p.user_name,
+      email:      p.email      || null,
+      avatar_url: p.avatar_url || p.avatar || null,
+      broker:     p.broker     || "ZERODHA",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/auth/logout  →  UI logout only, backend retains token for scanning
 router.post("/logout", (req, res) => {
   console.log("[Auth] UI logout — backend token retained, scanning continues");
