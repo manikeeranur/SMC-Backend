@@ -312,7 +312,9 @@ function updateAlertPnL(alert, currentLtp) {
   let t1HitTime = alert.t1HitTime || null;
 
   if (alert.status === "ACTIVE") {
-    const now = new Date();
+    const now        = new Date();
+    const elapsedMin = (now.getTime() - new Date(alert.createdAt).getTime()) / 60000;
+    const h = now.getHours(), m = now.getMinutes();
 
     // Track T1 milestone — record hit time once
     if (!t1Hit && currentLtp >= alert.rr.target1) {
@@ -320,8 +322,11 @@ function updateAlertPnL(alert, currentLtp) {
       t1HitTime = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" });
     }
 
-    if      (currentLtp <= alert.rr.sl)      status = "SL";
-    else if (currentLtp >= alert.rr.target2) status = "TARGET";
+    if      (currentLtp <= alert.rr.sl)                        status = "SL";
+    else if (currentLtp >= alert.rr.target2)                   status = "TARGET";
+    else if (h === 15 && m >= 20)                              status = "TIME_EXIT";
+    else if (elapsedMin >= 60 && currentLtp > alert.rr.entry)  status = "TIME_PROFIT";
+    else if (elapsedMin >= 75)                                  status = "TIME_EXIT";
   }
 
   // Record exit time when position first closes
@@ -513,6 +518,7 @@ async function runHistoricalSMCScan(date, expiry) {
 
     let status = "ACTIVE", exitPrice = entry, exitTime = null, t1Hit = false, t1HitTime = null, peakMove = 0;
     for (const c of laterCandles) {
+      const elapsedMin = (new Date(c.date).getTime() - entryMs) / 60000;
       const { h: ch, m: cm } = toIST(c.date);
       // Track peak high move from entry
       const move = +(c.high - entry).toFixed(2);
@@ -522,8 +528,11 @@ async function runHistoricalSMCScan(date, expiry) {
         t1Hit     = true;
         t1HitTime = `${String(ch).padStart(2,"0")}:${String(cm).padStart(2,"0")}`;
       }
-      if (c.low  <= rr.sl)      { status = "SL";     exitPrice = rr.sl;      exitTime = c.date; break; }
-      if (c.high >= rr.target2) { status = "TARGET"; exitPrice = rr.target2; exitTime = c.date; break; }
+      if (c.low  <= rr.sl)                               { status = "SL";          exitPrice = rr.sl;      exitTime = c.date; break; }
+      if (c.high >= rr.target2)                          { status = "TARGET";      exitPrice = rr.target2; exitTime = c.date; break; }
+      if (ch === 15 && cm >= 20)                         { status = "TIME_EXIT";   exitPrice = c.close;    exitTime = c.date; break; }
+      if (elapsedMin >= 60 && c.close > entry)           { status = "TIME_PROFIT"; exitPrice = c.close;    exitTime = c.date; break; }
+      if (elapsedMin >= 75)                              { status = "TIME_EXIT";   exitPrice = c.close;    exitTime = c.date; break; }
     }
     if (status === "ACTIVE" && laterCandles.length) {
       exitPrice = laterCandles[laterCandles.length - 1].close;
