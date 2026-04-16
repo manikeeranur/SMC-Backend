@@ -2,6 +2,7 @@ const express = require("express");
 const router  = express.Router();
 const { buildOptionChain } = require("../services/optionChainService");
 const { getLiveExpiries, getNiftyExpiries, getATM, getOptionChainInstruments } = require("../services/kiteService");
+const VALID_INDICES = ["NIFTY", "SENSEX"];
 const { isAuthenticated, clearToken, getClient } = require("../config/kite");
 
 // ── RSI helpers ───────────────────────────────────────────────────────────────
@@ -85,13 +86,12 @@ function fmtIST(d) {
 // Per-expiry cache (2s TTL)
 const cache = {};
 
-// GET /api/options/expiries
-// Returns live expiry dates from Kite when authenticated,
-// fallback to Thursday-generation when not.
+// GET /api/options/expiries?index=NIFTY|SENSEX
 router.get("/expiries", async (req, res) => {
+  const index = VALID_INDICES.includes(req.query.index) ? req.query.index : "NIFTY";
   try {
     const expiries = isAuthenticated()
-      ? await getLiveExpiries()
+      ? await getLiveExpiries(index)
       : getNiftyExpiries();
     res.json({ expiries });
   } catch (err) {
@@ -99,22 +99,23 @@ router.get("/expiries", async (req, res) => {
   }
 });
 
-// GET /api/options/chain/:expiry?strikes=15
+// GET /api/options/chain/:expiry?strikes=15&index=NIFTY|SENSEX
 router.get("/chain/:expiry", async (req, res) => {
   if (!isAuthenticated())
     return res.status(401).json({ error: "Not authenticated. POST /api/auth/token first." });
 
   const { expiry } = req.params;
-  const cached = cache[expiry];
+  const index  = VALID_INDICES.includes(req.query.index) ? req.query.index : "NIFTY";
+  const cacheKey = `${index}:${expiry}`;
+  const cached = cache[cacheKey];
   if (cached && Date.now() - cached.ts < 500) return res.json(cached.data);
 
   try {
-    const data = await buildOptionChain(expiry, Number(req.query.strikes) || 15);
-    cache[expiry] = { ts: Date.now(), data };
+    const data = await buildOptionChain(expiry, Number(req.query.strikes) || 15, index);
+    cache[cacheKey] = { ts: Date.now(), data };
     res.json(data);
   } catch (err) {
-    console.error(`[Chain] Error for ${expiry}:`, err.message);
-    // Kite returns this message when token is expired/invalid
+    console.error(`[Chain] Error for ${index}/${expiry}:`, err.message);
     if (err.message && err.message.toLowerCase().includes("incorrect")) {
       clearToken();
       return res.status(401).json({ error: "Session expired. Please login again.", code: "TOKEN_INVALID" });

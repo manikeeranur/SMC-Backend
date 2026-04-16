@@ -4,6 +4,10 @@ const { getClient, isAuthenticated } = require("../config/kite");
 let instrumentsCache = null;
 let instrumentsCacheTime = 0;
 
+// SENSEX instrument cache
+let bfoCache = null;
+let bfoCacheTime = 0;
+
 /**
  * Kite returns expiry as a JavaScript Date object set to midnight UTC,
  * but the actual expiry is midnight IST (UTC+5:30).
@@ -20,6 +24,24 @@ async function getNiftySpot() {
   if (!isAuthenticated()) throw new Error("Not authenticated");
   const quotes = await getClient().getQuote(["NSE:NIFTY 50"]);
   return quotes["NSE:NIFTY 50"].last_price;
+}
+
+async function getSensexSpot() {
+  if (!isAuthenticated()) throw new Error("Not authenticated");
+  const quotes = await getClient().getQuote(["BSE:SENSEX"]);
+  return quotes["BSE:SENSEX"].last_price;
+}
+
+async function getBFOInstruments() {
+  const now = Date.now();
+  if (bfoCache && now - bfoCacheTime < 3600000) return bfoCache;
+  const instruments = await getClient().getInstruments("BFO");
+  bfoCache = instruments.filter(
+    i => i.name === "SENSEX" && (i.instrument_type === "CE" || i.instrument_type === "PE")
+  );
+  bfoCacheTime = now;
+  console.log(`[Instruments] Cached ${bfoCache.length} SENSEX option instruments`);
+  return bfoCache;
 }
 
 async function getNFOInstruments() {
@@ -39,34 +61,38 @@ async function getNFOInstruments() {
  * Get upcoming weekly expiry dates from LIVE Kite instruments.
  * Returns actual NSE dates (handles holidays when expiry moves off Thursday).
  */
-async function getLiveExpiries() {
-  const instruments = await getNFOInstruments();
+async function getLiveExpiries(index = "NIFTY") {
+  const instruments = index === "SENSEX" ? await getBFOInstruments() : await getNFOInstruments();
+  const fallback    = index === "SENSEX" ? getSensexExpiriesFallback() : getNiftyExpiriesFallback();
   const todayIST = toISTDateStr(new Date());
   const unique = [...new Set(
     instruments
       .map(i => toISTDateStr(i.expiry))
       .filter(d => d >= todayIST)
   )].sort().slice(0, 6);
-  console.log(`[Expiries] Live: ${unique.join(", ")}`);
-  return unique.length ? unique : getNiftyExpiriesFallback();
+  console.log(`[Expiries] Live (${index}): ${unique.join(", ")}`);
+  return unique.length ? unique : fallback;
 }
 
 /**
- * Fallback: next 6 Thursdays (used when not authenticated / instruments not loaded)
+ * Fallback expiry generator — NIFTY expires Thursdays (4), SENSEX expires Fridays (5)
  */
-function getNiftyExpiriesFallback() {
+function getExpiriesFallback(weekday = 4) {
   const out = [];
   const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   for (let i = 0; i < 60; i++) {
     const d = new Date(nowIST);
     d.setUTCDate(nowIST.getUTCDate() + i);
-    if (d.getUTCDay() === 4) {
+    if (d.getUTCDay() === weekday) {
       out.push(d.toISOString().split("T")[0]);
       if (out.length >= 6) break;
     }
   }
   return out;
 }
+
+function getNiftyExpiriesFallback()  { return getExpiriesFallback(4); } // Thursday
+function getSensexExpiriesFallback() { return getExpiriesFallback(5); } // Friday
 
 // Kept for frontend demo mode (no auth needed)
 function getNiftyExpiries() { return getNiftyExpiriesFallback(); }
@@ -78,26 +104,25 @@ function getATM(spot, step = 50) {
 /**
  * Filter all NFO NIFTY option instruments for a given expiry date string "YYYY-MM-DD"
  */
-async function getOptionChainInstruments(expiry) {
-  const instruments = await getNFOInstruments();
+async function getOptionChainInstruments(expiry, index = "NIFTY") {
+  const instruments = index === "SENSEX" ? await getBFOInstruments() : await getNFOInstruments();
   const matched = instruments.filter(i => {
-    const iExpiry = toISTDateStr(i.expiry);  // fix timezone
+    const iExpiry = toISTDateStr(i.expiry);
     return iExpiry === expiry;
   });
-  console.log(`[Instruments] Found ${matched.length} instruments for expiry ${expiry}`);
+  console.log(`[Instruments] Found ${matched.length} ${index} instruments for expiry ${expiry}`);
 
-  // Debug: show available expiries if nothing matched
   if (matched.length === 0) {
     const available = [...new Set(instruments.map(i => toISTDateStr(i.expiry)))].sort().slice(0, 8);
     console.log(`[Instruments] Available expiries: ${available.join(", ")}`);
   }
-
   return matched;
 }
 
-async function getOptionQuotes(instruments) {
+async function getOptionQuotes(instruments, index = "NIFTY") {
   if (!isAuthenticated()) throw new Error("Not authenticated");
-  const symbols = instruments.map(i => `NFO:${i.tradingsymbol}`);
+  const exch = index === "SENSEX" ? "BFO" : "NFO";
+  const symbols = instruments.map(i => `${exch}:${i.tradingsymbol}`);
   const chunks  = [];
   for (let i = 0; i < symbols.length; i += 500) chunks.push(symbols.slice(i, i + 500));
   let quotes = {};
@@ -110,7 +135,9 @@ async function getOptionQuotes(instruments) {
 
 module.exports = {
   getNiftySpot,
+  getSensexSpot,
   getNFOInstruments,
+  getBFOInstruments,
   getNiftyExpiries,
   getLiveExpiries,
   getATM,

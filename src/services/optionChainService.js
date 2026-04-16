@@ -1,4 +1,4 @@
-const { getNiftySpot, getOptionChainInstruments, getOptionQuotes, getATM, getNiftyExpiries } = require("./kiteService");
+const { getNiftySpot, getSensexSpot, getOptionChainInstruments, getOptionQuotes, getATM, getNiftyExpiries } = require("./kiteService");
 const { isAuthenticated } = require("../config/kite");
 
 // ─── Black-Scholes ────────────────────────────────────────────────────────────
@@ -54,14 +54,15 @@ function daysToExpiry(expiry) {
 }
 
 // ─── Build chain from fetched instruments + quotes ────────────────────────────
-function assembleChain(instruments, quotes, spot, atm, dte, expiry) {
-  const T = dte / 365;
-  const R = 0.065;
+function assembleChain(instruments, quotes, spot, atm, dte, expiry, index = "NIFTY") {
+  const T    = dte / 365;
+  const R    = 0.065;
+  const exch = index === "SENSEX" ? "BFO" : "NFO";
 
   // Group by strike (ensure numeric key)
   const strikeMap = {};
   for (const inst of instruments) {
-    const sym = `NFO:${inst.tradingsymbol}`;
+    const sym = `${exch}:${inst.tradingsymbol}`;
     const q   = quotes[sym];
     if (!q) continue;
 
@@ -157,35 +158,35 @@ function assembleChain(instruments, quotes, spot, atm, dte, expiry) {
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
-async function buildOptionChain(expiry, nEach = 15) {
+async function buildOptionChain(expiry, nEach = 15, index = "NIFTY") {
   if (!isAuthenticated()) throw new Error("Not authenticated with Kite");
 
-  const spot = await getNiftySpot();
-  const atm  = getATM(spot);
-  const dte  = daysToExpiry(expiry);
+  const isSensex = index === "SENSEX";
+  const spot     = isSensex ? await getSensexSpot() : await getNiftySpot();
+  const atmStep  = isSensex ? 100 : 50;
+  const atm      = getATM(spot, atmStep);
+  const dte      = daysToExpiry(expiry);
 
-  // Fetch all instruments for this expiry (date fix is inside getOptionChainInstruments)
-  const allInst = await getOptionChainInstruments(expiry);
+  const allInst = await getOptionChainInstruments(expiry, index);
   if (!allInst.length) {
-    throw new Error(`No NIFTY option instruments found for expiry ${expiry}. Check backend console for available dates.`);
+    throw new Error(`No ${index} option instruments found for expiry ${expiry}. Check backend console for available dates.`);
   }
 
-  // Filter to ±nEach strikes around ATM (numeric comparison)
+  // Filter to ±nEach strikes around ATM
   const wantStrikes = new Set();
-  for (let i = -nEach; i <= nEach; i++) wantStrikes.add(atm + i * 50);
+  for (let i = -nEach; i <= nEach; i++) wantStrikes.add(atm + i * atmStep);
 
   let instruments = allInst.filter(i => wantStrikes.has(Number(i.strike)));
 
-  // Fallback: if ATM filter removes everything, use all available strikes
   if (!instruments.length) {
     console.warn(`[Chain] ATM filter empty — using all ${allInst.length} instruments for ${expiry}`);
     instruments = allInst;
   }
 
-  console.log(`[Chain] Fetching quotes for ${instruments.length} instruments (expiry ${expiry}, ATM ${atm})`);
+  console.log(`[Chain] Fetching quotes for ${instruments.length} ${index} instruments (expiry ${expiry}, ATM ${atm})`);
 
-  const quotes = await getOptionQuotes(instruments);
-  return assembleChain(instruments, quotes, spot, atm, dte, expiry);
+  const quotes = await getOptionQuotes(instruments, index);
+  return assembleChain(instruments, quotes, spot, atm, dte, expiry, index);
 }
 
 module.exports = { buildOptionChain, getNiftyExpiries };
