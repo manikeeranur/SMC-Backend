@@ -321,6 +321,38 @@ router.get("/positions", async (_req, res) => {
   }
 });
 
+// ─── POST /api/account/order — place a new BUY/SELL market order ─────────────
+router.post("/order", async (req, res) => {
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  const { tradingsymbol, transaction_type, quantity, exchange } = req.body;
+  if (!tradingsymbol || !transaction_type || !quantity) {
+    return res.status(400).json({ error: "tradingsymbol, transaction_type and quantity are required" });
+  }
+  if (!["BUY", "SELL"].includes(transaction_type)) {
+    return res.status(400).json({ error: "transaction_type must be BUY or SELL" });
+  }
+  const client = getClient();
+  try {
+    const exch = FNO_EXCHANGES.includes(exchange) ? exchange : EXCHANGE;
+    const resp = await client.placeOrder("regular", {
+      exchange:          exch,
+      tradingsymbol,
+      transaction_type,
+      quantity:          Number(quantity),
+      product:           PRODUCT,
+      order_type:        "MARKET",
+      validity:          "DAY",
+      market_protection: 1,
+      tag:               "CHAIN_ORDER",
+    });
+    console.log(`[Account/Order] ${transaction_type} ${tradingsymbol} × ${quantity}  [order_id: ${resp.order_id}]`);
+    res.json({ order_id: resp.order_id, tradingsymbol, transaction_type, quantity });
+  } catch (err) {
+    console.error("[Account/Order] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── POST /api/account/exit — manually exit a single open position ────────────
 router.post("/exit", async (req, res) => {
   if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
