@@ -461,6 +461,28 @@ router.get("/historical-scan", async (req, res) => {
   }
 });
 
+// ── Index quotes (NIFTY, SENSEX, BANKNIFTY …) ────────────────────────────────
+const INDEX_INSTRUMENTS = [
+  "NSE:NIFTY 50", "BSE:SENSEX", "NSE:NIFTY BANK", "NSE:NIFTY FIN SERVICE",
+  "NSE:NIFTY MID SELECT", "NSE:NIFTY NEXT 50", "BSE:BANKEX", "NSE:INDIA VIX",
+];
+router.get("/index-quotes", async (_req, res) => {
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  try {
+    const raw = await getQuotes(INDEX_INSTRUMENTS);
+    const result = INDEX_INSTRUMENTS.map(key => {
+      const val = raw[key] || {};
+      const ltp = val.last_price || 0;
+      const prevClose = val.ohlc?.close || 0;
+      return { key, ltp, prevClose, ltpChange: ltp - prevClose };
+    });
+    res.json({ indices: result });
+  } catch (err) {
+    console.error("[IndexQuotes]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Live quotes for equity watchlist tokens ───────────────────────────────────
 router.get("/quotes", async (req, res) => {
   const instruments = (req.query.instruments || "").split(",").filter(Boolean);
