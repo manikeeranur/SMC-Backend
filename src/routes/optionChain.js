@@ -461,6 +461,26 @@ router.get("/historical-scan", async (req, res) => {
   }
 });
 
+// ── Live quotes for equity watchlist tokens ───────────────────────────────────
+router.get("/quotes", async (req, res) => {
+  const instruments = (req.query.instruments || "").split(",").filter(Boolean);
+  if (!instruments.length) return res.json({ quotes: {} });
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  try {
+    const raw = await getQuotes(instruments);
+    const quotes = {};
+    for (const [key, val] of Object.entries(raw)) {
+      const ltp = val.last_price || 0;
+      const prevClose = val.ohlc?.close || 0;
+      quotes[key] = { ltp, prevClose, ltpChange: ltp - prevClose };
+    }
+    res.json({ quotes });
+  } catch (err) {
+    console.error("[Quotes]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Instrument search ─────────────────────────────────────────────────────────
 router.get("/search", async (req, res) => {
   const q = (req.query.q || "").trim();
@@ -476,11 +496,18 @@ router.get("/search", async (req, res) => {
         const quotes = await getQuotes(instruments);
         for (const [key, val] of Object.entries(quotes)) {
           const sym = key.split(":")[1];
-          prices[sym] = val.last_price || 0;
+          const ltp = val.last_price || 0;
+          const prevClose = val.ohlc?.close || 0;
+          prices[sym] = { ltp, prevClose, ltpChange: ltp - prevClose };
         }
       } catch {}
     }
-    const withPrices = results.map(r => ({ ...r, ltp: prices[r.tradingsymbol] ?? r.ltp }));
+    const withPrices = results.map(r => ({
+      ...r,
+      ltp: prices[r.tradingsymbol]?.ltp ?? r.ltp,
+      prevClose: prices[r.tradingsymbol]?.prevClose ?? 0,
+      ltpChange: prices[r.tradingsymbol]?.ltpChange ?? 0,
+    }));
     res.json({ results: withPrices });
   } catch (err) {
     console.error("[Search]", err.message);
