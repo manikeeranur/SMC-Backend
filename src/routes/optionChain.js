@@ -168,13 +168,38 @@ router.get("/candles", async (req, res) => {
     return res.status(400).json({ error: "token and date (or from/to) are required" });
 
   try {
-    const from = new Date(fromParam || date); from.setHours(9, 15, 0, 0);
-    const to   = new Date(toParam   || date); to.setHours(15, 30, 0, 0);
+    let candles = [];
 
-    // args: (token, interval, from, to, continuous=false, oi=true)
-    const candles = await getClient().getHistoricalData(
-      parseInt(token), interval, from, to, false, true
-    );
+    if (interval === "day") {
+      // Daily candles for equity/index: chunk into 400-calendar-day slices.
+      // Kite returns ~2000 max, but chunking avoids timeouts on large ranges.
+      // oi=false because equity instruments have no OI data.
+      const CHUNK  = 400;
+      let cursor   = new Date(fromParam || date);
+      const toDate = new Date(toParam   || date);
+      while (cursor <= toDate) {
+        const chunkEnd = new Date(cursor);
+        chunkEnd.setDate(chunkEnd.getDate() + CHUNK - 1);
+        const end = chunkEnd > toDate ? new Date(toDate) : chunkEnd;
+        try {
+          const chunk = await getClient().getHistoricalData(
+            parseInt(token), "day", cursor, end, false, false
+          );
+          candles.push(...chunk);
+        } catch (chunkErr) {
+          console.warn(`[Candles] day-chunk ${cursor.toISOString().slice(0,10)}→${end.toISOString().slice(0,10)} failed: ${chunkErr.message}`);
+        }
+        cursor = new Date(end);
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    } else {
+      // Intraday/minute candles: constrain to market hours and include OI for options
+      const from = new Date(fromParam || date); from.setHours(9, 15, 0, 0);
+      const to   = new Date(toParam   || date); to.setHours(15, 30, 0, 0);
+      candles = await getClient().getHistoricalData(
+        parseInt(token), interval, from, to, false, true
+      );
+    }
 
     const closes  = candles.map(c => c.close);
     const rsiArr  = calcRollingRSI(closes, 14);
@@ -444,7 +469,7 @@ router.get("/search", async (req, res) => {
   try {
     const results = await searchInstruments(q, 15);
     // Fetch live prices for top results
-    const instruments = results.map(r => `NSE:${r.tradingsymbol}`);
+    const instruments = results.map(r => `${r.exchange}:${r.tradingsymbol}`);
     let prices = {};
     if (instruments.length) {
       try {

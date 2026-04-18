@@ -149,19 +149,25 @@ async function searchInstruments(query, limit = 15) {
   const now = Date.now();
   if (!nseEqCache || now - nseEqCacheTime > 6 * 3600000) {
     try {
-      const [nseInst, nfoInst] = await Promise.all([
+      const [nseInst, bseInst, nfoInst] = await Promise.all([
         getClient().getInstruments("NSE"),
+        getClient().getInstruments("BSE"),
         getClient().getInstruments("NFO"),
       ]);
       // NSE equities
-      const equities = nseInst
+      const nseEquities = nseInst
         .filter(i => i.instrument_type === "EQ")
         .map(i => ({ token: i.instrument_token, tradingsymbol: i.tradingsymbol, name: i.name, exchange: "NSE", type: "EQ", ltp: i.last_price || 0 }));
+      // BSE equities + indices (SENSEX, BANKEX, etc.)
+      const bseEquities = bseInst
+        .filter(i => i.instrument_type === "EQ" || i.instrument_type === "INDEX")
+        .map(i => ({ token: i.instrument_token, tradingsymbol: i.tradingsymbol, name: i.name, exchange: "BSE", type: "EQ", ltp: i.last_price || 0 }));
+      const equities = [...nseEquities, ...bseEquities];
       // NFO F&O stocks (not NIFTY/SENSEX, just stock options)
       const foStocks = [...new Set(nfoInst.filter(i => i.name && i.name !== "NIFTY").map(i => i.name))];
       nseEqCache = { equities, foStocks };
       nseEqCacheTime = now;
-      console.log(`[Search] Cached ${equities.length} NSE equities, ${foStocks.length} F&O stocks`);
+      console.log(`[Search] Cached ${nseEquities.length} NSE + ${bseEquities.length} BSE equities, ${foStocks.length} F&O stocks`);
     } catch (e) {
       console.error("[Search] Failed to load instruments:", e.message);
       return [];
