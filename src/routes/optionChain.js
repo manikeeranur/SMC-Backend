@@ -1,7 +1,7 @@
 const express = require("express");
 const router  = express.Router();
 const { buildOptionChain } = require("../services/optionChainService");
-const { getLiveExpiries, getNiftyExpiries, getATM, getOptionChainInstruments } = require("../services/kiteService");
+const { getLiveExpiries, getNiftyExpiries, getATM, getOptionChainInstruments, searchInstruments, getQuotes } = require("../services/kiteService");
 const VALID_INDICES = ["NIFTY", "SENSEX"];
 const { isAuthenticated, clearToken, getClient } = require("../config/kite");
 
@@ -432,6 +432,33 @@ router.get("/historical-scan", async (req, res) => {
       clearToken();
       return res.status(401).json({ error: "Session expired. Please login again.", code: "TOKEN_INVALID" });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Instrument search ─────────────────────────────────────────────────────────
+router.get("/search", async (req, res) => {
+  const q = (req.query.q || "").trim();
+  if (!q) return res.json({ results: [] });
+  if (!isAuthenticated()) return res.status(401).json({ error: "Not authenticated" });
+  try {
+    const results = await searchInstruments(q, 15);
+    // Fetch live prices for top results
+    const instruments = results.map(r => `NSE:${r.tradingsymbol}`);
+    let prices = {};
+    if (instruments.length) {
+      try {
+        const quotes = await getQuotes(instruments);
+        for (const [key, val] of Object.entries(quotes)) {
+          const sym = key.split(":")[1];
+          prices[sym] = val.last_price || 0;
+        }
+      } catch {}
+    }
+    const withPrices = results.map(r => ({ ...r, ltp: prices[r.tradingsymbol] ?? r.ltp }));
+    res.json({ results: withPrices });
+  } catch (err) {
+    console.error("[Search]", err.message);
     res.status(500).json({ error: err.message });
   }
 });

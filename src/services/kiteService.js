@@ -8,6 +8,10 @@ let instrumentsCacheTime = 0;
 let bfoCache = null;
 let bfoCacheTime = 0;
 
+// NSE equity instrument cache (for search)
+let nseEqCache = null;
+let nseEqCacheTime = 0;
+
 /**
  * Kite returns expiry as a JavaScript Date object set to midnight UTC,
  * but the actual expiry is midnight IST (UTC+5:30).
@@ -133,6 +137,77 @@ async function getOptionQuotes(instruments, index = "NIFTY") {
   return quotes;
 }
 
+/**
+ * Search NSE equity + NFO F&O instruments by symbol or company name.
+ * Returns up to `limit` matches sorted by relevance.
+ */
+async function searchInstruments(query, limit = 15) {
+  if (!query || query.trim().length < 1) return [];
+  const q = query.trim().toUpperCase();
+
+  // Refresh NSE equity cache every 6 hours
+  const now = Date.now();
+  if (!nseEqCache || now - nseEqCacheTime > 6 * 3600000) {
+    try {
+      const [nseInst, nfoInst] = await Promise.all([
+        getClient().getInstruments("NSE"),
+        getClient().getInstruments("NFO"),
+      ]);
+      // NSE equities
+      const equities = nseInst
+        .filter(i => i.instrument_type === "EQ")
+        .map(i => ({ token: i.instrument_token, tradingsymbol: i.tradingsymbol, name: i.name, exchange: "NSE", type: "EQ", ltp: i.last_price || 0 }));
+      // NFO F&O stocks (not NIFTY/SENSEX, just stock options)
+      const foStocks = [...new Set(nfoInst.filter(i => i.name && i.name !== "NIFTY").map(i => i.name))];
+      nseEqCache = { equities, foStocks };
+      nseEqCacheTime = now;
+      console.log(`[Search] Cached ${equities.length} NSE equities, ${foStocks.length} F&O stocks`);
+    } catch (e) {
+      console.error("[Search] Failed to load instruments:", e.message);
+      return [];
+    }
+  }
+
+  const { equities } = nseEqCache;
+
+  // Score each instrument: exact symbol match = 100, starts-with = 50, contains = 10
+  const scored = equities
+    .map(inst => {
+      const sym = inst.tradingsymbol.toUpperCase();
+      const name = (inst.name || "").toUpperCase();
+      let score = 0;
+      if (sym === q) score = 100;
+      else if (sym.startsWith(q)) score = 50 + (1 / sym.length);
+      else if (name.startsWith(q)) score = 30;
+      else if (sym.includes(q)) score = 10;
+      else if (name.includes(q)) score = 5;
+      return { ...inst, score };
+    })
+    .filter(i => i.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  return scored;
+}
+
+/**
+ * Fetch live quotes for given instrument tokens.
+ * tokens: array of "NSE:SYMBOL" or "NFO:SYMBOL" strings
+ */
+async function getQuotes(instruments) {
+  if (!instruments.length) return {};
+  const CHUNK = 200;
+  let quotes = {};
+  for (let i = 0; i < instruments.length; i += CHUNK) {
+    const chunk = instruments.slice(i, i + CHUNK);
+    try {
+      const result = await getClient().getQuote(chunk);
+      Object.assign(quotes, result);
+    } catch {}
+  }
+  return quotes;
+}
+
 module.exports = {
   getNiftySpot,
   getSensexSpot,
@@ -144,4 +219,6 @@ module.exports = {
   getOptionChainInstruments,
   getOptionQuotes,
   toISTDateStr,
+  searchInstruments,
+  getQuotes,
 };
