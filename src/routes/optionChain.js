@@ -192,13 +192,46 @@ router.get("/candles", async (req, res) => {
         cursor = new Date(end);
         cursor.setDate(cursor.getDate() + 1);
       }
+    } else if (interval === "60minute") {
+      // 60-minute candles: Kite allows ~400 days per call; chunk to handle large ranges
+      const CHUNK  = 400;
+      let cursor   = new Date(fromParam || date); cursor.setHours(9, 15, 0, 0);
+      const toDate = new Date(toParam   || date); toDate.setHours(15, 30, 0, 0);
+      while (cursor <= toDate) {
+        const chunkEnd = new Date(cursor);
+        chunkEnd.setDate(chunkEnd.getDate() + CHUNK - 1);
+        chunkEnd.setHours(15, 30, 0, 0);
+        const end = chunkEnd > toDate ? new Date(toDate) : chunkEnd;
+        try {
+          const chunk = await getClient().getHistoricalData(parseInt(token), "60minute", cursor, end, false, true);
+          candles.push(...chunk);
+        } catch (chunkErr) {
+          console.warn(`[Candles] 60min-chunk ${cursor.toISOString().slice(0,10)}→${end.toISOString().slice(0,10)} failed: ${chunkErr.message}`);
+        }
+        cursor = new Date(end); cursor.setDate(cursor.getDate() + 1); cursor.setHours(9, 15, 0, 0);
+      }
+    } else if (interval === "minute") {
+      // Minute candles: Kite allows ~60 days per call; chunk for large ranges
+      const CHUNK  = 60;
+      let cursor   = new Date(fromParam || date); cursor.setHours(9, 15, 0, 0);
+      const toDate = new Date(toParam   || date); toDate.setHours(15, 30, 0, 0);
+      while (cursor <= toDate) {
+        const chunkEnd = new Date(cursor);
+        chunkEnd.setDate(chunkEnd.getDate() + CHUNK - 1);
+        chunkEnd.setHours(15, 30, 0, 0);
+        const end = chunkEnd > toDate ? new Date(toDate) : chunkEnd;
+        try {
+          const chunk = await getClient().getHistoricalData(parseInt(token), "minute", cursor, end, false, true);
+          candles.push(...chunk);
+        } catch (chunkErr) {
+          console.warn(`[Candles] min-chunk ${cursor.toISOString().slice(0,10)}→${end.toISOString().slice(0,10)} failed: ${chunkErr.message}`);
+        }
+        cursor = new Date(end); cursor.setDate(cursor.getDate() + 1); cursor.setHours(9, 15, 0, 0);
+      }
     } else {
-      // Intraday/minute candles: constrain to market hours and include OI for options
       const from = new Date(fromParam || date); from.setHours(9, 15, 0, 0);
       const to   = new Date(toParam   || date); to.setHours(15, 30, 0, 0);
-      candles = await getClient().getHistoricalData(
-        parseInt(token), interval, from, to, false, true
-      );
+      candles = await getClient().getHistoricalData(parseInt(token), interval, from, to, false, true);
     }
 
     const closes  = candles.map(c => c.close);
