@@ -163,7 +163,8 @@ router.get("/candles", async (req, res) => {
   if (!isAuthenticated())
     return res.status(401).json({ error: "Not authenticated" });
 
-  const { token, date, from: fromParam, to: toParam, interval = "minute" } = req.query;
+  const { token, date, from: fromParam, to: toParam, interval = "minute", skipIndicators } = req.query;
+  const noIndicators = skipIndicators === "true";
   if (!token || (!date && !fromParam))
     return res.status(400).json({ error: "token and date (or from/to) are required" });
 
@@ -234,30 +235,32 @@ router.get("/candles", async (req, res) => {
       candles = await getClient().getHistoricalData(parseInt(token), interval, from, to, false, true);
     }
 
-    const closes  = candles.map(c => c.close);
-    const rsiArr  = calcRollingRSI(closes, 14);
-    const ema9arr  = calcEMA(closes, 9);
-    const ema21arr = calcEMA(closes, 21);
-    const bbArr    = calcBB(closes, 20, 2);
-    const macdArr  = calcMACD(closes);
+    const closes   = candles.map(c => c.close);
+    const rsiArr   = noIndicators ? [] : calcRollingRSI(closes, 14);
+    const ema9arr  = noIndicators ? [] : calcEMA(closes, 9);
+    const ema21arr = noIndicators ? [] : calcEMA(closes, 21);
+    const bbArr    = noIndicators ? [] : calcBB(closes, 20, 2);
+    const macdArr  = noIndicators ? [] : calcMACD(closes);
 
     const rows = candles.map((c, i) => ({
-      date:     fmtIST(c.date),
-      open:     c.open,
-      high:     c.high,
-      low:      c.low,
-      close:    c.close,
-      volume:   c.volume,
-      oi:       c.oi,
-      rsi14:    rsiArr[i],
-      ema9:     ema9arr[i],
-      ema21:    ema21arr[i],
-      bbMid:    bbArr[i].mid,
-      bbUp:     bbArr[i].up,
-      bbDn:     bbArr[i].dn,
-      macd:     macdArr[i].macd,
-      macdSig:  macdArr[i].sig,
-      macdHist: macdArr[i].hist,
+      date:   fmtIST(c.date),
+      open:   c.open,
+      high:   c.high,
+      low:    c.low,
+      close:  c.close,
+      volume: c.volume,
+      oi:     c.oi,
+      ...(noIndicators ? {} : {
+        rsi14:    rsiArr[i],
+        ema9:     ema9arr[i],
+        ema21:    ema21arr[i],
+        bbMid:    bbArr[i].mid,
+        bbUp:     bbArr[i].up,
+        bbDn:     bbArr[i].dn,
+        macd:     macdArr[i].macd,
+        macdSig:  macdArr[i].sig,
+        macdHist: macdArr[i].hist,
+      }),
     }));
 
     res.json({ rows });
