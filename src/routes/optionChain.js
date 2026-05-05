@@ -4,6 +4,7 @@ const { buildOptionChain } = require("../services/optionChainService");
 const { getLiveExpiries, getNiftyExpiries, getATM, getOptionChainInstruments, searchInstruments, getQuotes } = require("../services/kiteService");
 const VALID_INDICES = ["NIFTY", "SENSEX"];
 const { isAuthenticated, clearToken, getClient } = require("../config/kite");
+const { MIN_PREMIUM } = require("../config/constants");
 
 // ── RSI helpers ───────────────────────────────────────────────────────────────
 function calcRollingRSI(closes, period = 14) {
@@ -458,13 +459,12 @@ router.get("/historical-scan", async (req, res) => {
       .filter(s => strikeMap[s].CE && strikeMap[s].PE);
     const rows = strikes.map(s => ({ strike: s, isATM: s === atm, ce: strikeMap[s].CE, pe: strikeMap[s].PE }));
 
-    // 6. Scanner logic — filter LTP ≥ 200, sort by OI/Vol asc
-    const MIN = 200;
+    // 6. Scanner logic — filter LTP ≥ MIN_PREMIUM, sort by OI/Vol asc
     const sortBy = arr => [...arr].sort((a, b) => a.oiVolRatio - b.oiVolRatio);
-    let ces = rows.filter(r => r.ce.ltp >= MIN).map(r => r.ce);
-    let pes = rows.filter(r => r.pe.ltp >= MIN).map(r => r.pe);
-    // Fallback thresholds if nothing found
-    if (!ces.length && !pes.length) { ces = rows.filter(r => r.ce.ltp >= 100).map(r => r.ce); pes = rows.filter(r => r.pe.ltp >= 100).map(r => r.pe); }
+    let ces = rows.filter(r => r.ce.ltp >= MIN_PREMIUM).map(r => r.ce);
+    let pes = rows.filter(r => r.pe.ltp >= MIN_PREMIUM).map(r => r.pe);
+    // Fallback: any positive LTP
+    if (!ces.length && !pes.length) { ces = rows.filter(r => r.ce.ltp > 0).map(r => r.ce); pes = rows.filter(r => r.pe.ltp > 0).map(r => r.pe); }
     if (!ces.length && !pes.length) { ces = rows.map(r => r.ce); pes = rows.map(r => r.pe); }
     ces = sortBy(ces); pes = sortBy(pes);
 

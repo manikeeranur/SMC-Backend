@@ -86,4 +86,41 @@ router.get("/", async (req, res) => {
   }
 });
 
+// ── GET /api/results/summary?type=live|backtest  →  [{date, totalPnL, trades, wins}] ──
+router.get("/summary", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const { type } = req.query;
+  if (!isConnected()) return res.json({ summary: [] });
+
+  try {
+    if (type === "live") {
+      const agg = await Alert.aggregate([
+        { $group: {
+          _id:      "$date",
+          totalPnL: { $sum: "$currentPnL" },
+          trades:   { $sum: 1 },
+          wins:     { $sum: { $cond: [{ $in: ["$status", ["TARGET", "TIME_PROFIT"]] }, 1, 0] } },
+        }},
+        { $sort: { _id: 1 } },
+      ]);
+      return res.json({ summary: agg.map(r => ({ date: r._id, totalPnL: r.totalPnL ?? 0, trades: r.trades, wins: r.wins })) });
+    }
+
+    if (type === "backtest") {
+      const docs = await BacktestResult.find({}, { date: 1, results: 1 }).lean();
+      const summary = docs.map(doc => {
+        const rows     = doc.results ?? [];
+        const totalPnL = rows.reduce((s, r) => s + (r.currentPnL ?? 0), 0);
+        const wins     = rows.filter(r => r.status === "TARGET" || r.status === "TIME_PROFIT").length;
+        return { date: doc.date, totalPnL, trades: rows.length, wins };
+      }).sort((a, b) => a.date.localeCompare(b.date));
+      return res.json({ summary });
+    }
+
+    return res.status(400).json({ error: "type must be live or backtest" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

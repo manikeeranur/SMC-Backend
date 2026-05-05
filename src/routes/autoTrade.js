@@ -4,7 +4,8 @@ const express = require("express");
 const router  = express.Router();
 const { getClient, isAuthenticated } = require("../config/kite");
 const { sendAutoTradeStarted, sendAutoTradeStopped, sendAutoTradeOrder } = require("../services/telegramService");
-const { LOT_SIZE, EXCHANGE, PRODUCT } = require("../config/constants");
+const { LOT_SIZE, NUM_LOTS, EXCHANGE, PRODUCT } = require("../config/constants");
+const ORDER_QTY = LOT_SIZE * NUM_LOTS;
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let enabled   = false;
@@ -67,7 +68,7 @@ async function executeEntry(alert) {
       exchange:          EXCHANGE,
       tradingsymbol:     sym,
       transaction_type:  "BUY",
-      quantity:          LOT_SIZE,
+      quantity:          ORDER_QTY,
       product:           PRODUCT,
       order_type:        "MARKET",
       validity:          "DAY",
@@ -76,14 +77,14 @@ async function executeEntry(alert) {
     });
     pos.entryOrderId = entryResp.order_id;
     pos.status = "ENTRY_PLACED";
-    log(alertId, `Entry order placed — ${sym} BUY ${LOT_SIZE} @ MARKET  [order_id: ${entryResp.order_id}]`);
+    log(alertId, `Entry order placed — ${sym} BUY ${ORDER_QTY} (${NUM_LOTS} lot${NUM_LOTS > 1 ? "s" : ""}) @ MARKET  [order_id: ${entryResp.order_id}]`);
 
     // 2. SL-M SELL at rr.sl
     const slResp = await getClient().placeOrder("regular", {
       exchange:          EXCHANGE,
       tradingsymbol:     sym,
       transaction_type:  "SELL",
-      quantity:          LOT_SIZE,
+      quantity:          ORDER_QTY,
       product:           PRODUCT,
       order_type:        "SL-M",
       trigger_price:     rr.sl,
@@ -192,7 +193,7 @@ async function executeExit(alert) {
       exchange:          EXCHANGE,
       tradingsymbol,
       transaction_type:  "SELL",
-      quantity:          LOT_SIZE,
+      quantity:          ORDER_QTY,
       product:           PRODUCT,
       order_type:        "MARKET",
       validity:          "DAY",

@@ -3,6 +3,7 @@
 const { getClient, isAuthenticated } = require("../config/kite");
 const { getATM }                      = require("./kiteService");
 const { buildOptionChain }            = require("./optionChainService");
+const { MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT } = require("../config/constants");
 
 const NIFTY_TOKEN = 256265; // NSE:NIFTY 50 index
 
@@ -173,31 +174,31 @@ function analyzeCandles(cs, spot) {
   };
 }
 
-// ─── Find best option in LTP ₹200–₹300 ───────────────────────────────────────
+// ─── Find best option in LTP range ───────────────────────────────────────────
 async function findBestLeg(direction, expiry, spot) {
   const chain = await buildOptionChain(expiry, 15);
   const atm   = getATM(spot);
 
   const all = chain.rows.flatMap(r => direction === "CE" ? [r.ce] : [r.pe]);
 
-  // Primary filter: ₹200–₹300
-  let candidates = all.filter(l => l.ltp >= 200 && l.ltp <= 300);
+  // Primary filter: MIN_PREMIUM–MAX_PREMIUM
+  let candidates = all.filter(l => l.ltp >= MIN_PREMIUM && l.ltp <= MAX_PREMIUM);
 
-  // Fallback 1: ₹150–₹350
+  // Fallback 1: wider range
   if (!candidates.length)
-    candidates = all.filter(l => l.ltp >= 150 && l.ltp <= 350);
+    candidates = all.filter(l => l.ltp >= FALLBACK1_MIN && l.ltp <= FALLBACK1_MAX);
 
-  // Fallback 2: ₹100–₹400
+  // Fallback 2: widest range
   if (!candidates.length)
-    candidates = all.filter(l => l.ltp >= 100 && l.ltp <= 400);
+    candidates = all.filter(l => l.ltp >= FALLBACK2_MIN && l.ltp <= FALLBACK2_MAX);
 
   if (!candidates.length) return null;
 
-  // Sort: closest to ATM → closest to ₹250 sweet-spot
+  // Sort: closest to ATM → closest to sweet-spot premium
   candidates.sort((a, b) => {
     const da = Math.abs(a.strike - atm), db = Math.abs(b.strike - atm);
     if (Math.abs(da - db) > 50) return da - db;
-    return Math.abs(a.ltp - 250) - Math.abs(b.ltp - 250);
+    return Math.abs(a.ltp - SWEET_SPOT) - Math.abs(b.ltp - SWEET_SPOT);
   });
 
   return candidates[0];

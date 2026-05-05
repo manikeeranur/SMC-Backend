@@ -2,11 +2,12 @@ const express  = require("express");
 const router   = express.Router();
 const { buildOptionChain } = require("../services/optionChainService");
 const { runScanner, calcRR, is926 } = require("../services/analysisService");
+const { MIN_PREMIUM } = require("../config/constants");
 const { isAuthenticated } = require("../config/kite");
 
 let lastScan = null;
 
-// GET /api/analysis/scan/:expiry?min_premium=200&force=true
+// GET /api/analysis/scan/:expiry?min_premium=100&force=true
 router.get("/scan/:expiry", async (req, res) => {
   if (!isAuthenticated())
     return res.status(401).json({ error: "Not authenticated" });
@@ -26,7 +27,7 @@ router.get("/scan/:expiry", async (req, res) => {
 
   try {
     const { expiry }   = req.params;
-    const minPremium   = Number(req.query.min_premium) || 200;
+    const minPremium   = Number(req.query.min_premium) || MIN_PREMIUM;
     const data         = await buildOptionChain(expiry);
     const result       = runScanner(data.rows, data.spot, minPremium);
 

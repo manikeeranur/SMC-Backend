@@ -1,13 +1,12 @@
 /**
  * 9:26 AM Scanner  — selects best CE and PE
  *
- * Filters:   premium >= MIN_PREMIUM (default ₹200)
+ * Filters:   premium >= MIN_PREMIUM (default ₹100, max ₹200)
  * Scores on: Delta 0.25–0.50 | low OI/Vol ratio | high IV
  * RR:        SL = −30%, T1 = +30% (1:1), T2 = +75% (1:2.5)
  */
 
-const MIN_PREMIUM = Number(process.env.MIN_PREMIUM) || 200;
-const MAX_PREMIUM = 300; // strictly ₹200–₹300 range
+const { MIN_PREMIUM, MAX_PREMIUM } = require("../config/constants");
 
 function runScanner(rows, spot, minPremium = MIN_PREMIUM) {
   const candidates = [];
