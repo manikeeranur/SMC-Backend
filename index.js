@@ -15,8 +15,8 @@ const autoTradeRoutes   = require("./src/routes/autoTrade");
 const resultsRoutes     = require("./src/routes/results");
 const accountRoutes     = require("./src/routes/account");
 const { eodSnapshot }   = require("./src/routes/account");
-const { stopTicker, subscribeTokens } = require("./src/websocket/ticker");
-const { isAuthenticated } = require("./src/config/kite");
+const { startTicker, stopTicker, subscribeTokens } = require("./src/websocket/ticker");
+const { isAuthenticated, onAccessTokenSet } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
 const { syncAlerts }      = require("./src/services/dbSyncService");
 
@@ -203,7 +203,19 @@ setInterval(() => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 const { isConfigured: tgOk } = require("./src/services/telegramService");
 
+// ─── Restart ticker whenever a new Kite access token is set ──────────────────
+onAccessTokenSet(() => {
+  console.log("[Ticker] New access token — (re)starting ticker");
+  startTicker(clients);
+});
+
 server.listen(PORT, () => {
+  // Start ticker immediately if a token was already loaded from env
+  if (isAuthenticated()) {
+    startTicker(clients);
+    console.log("[Ticker] Auto-started from env token");
+  }
+
   console.log(`
 ╔══════════════════════════════════════════════════╗
 ║   NIFTY OPTIONS ALGO  —  Backend                 ║

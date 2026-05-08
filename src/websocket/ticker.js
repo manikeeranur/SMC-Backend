@@ -2,10 +2,14 @@ const { KiteTicker } = require("kiteconnect");
 const { getAccessToken } = require("../config/kite");
 require("dotenv").config();
 
-let ticker  = null;
-let clients = new Set();
+// Always-on index tokens: NIFTY50, SENSEX, BANKNIFTY, FINNIFTY, MIDCAP, NIFTY NEXT50, BANKEX, VIX
+const INDEX_TOKENS = [256265, 265, 260105, 257801, 288009, 270857, 274441, 264969];
 
-function startTicker(wsClients, tokens = []) {
+let ticker       = null;
+let clients      = new Set();
+let subscribedTokens = new Set(INDEX_TOKENS); // accumulate all tokens across calls
+
+function startTicker(wsClients) {
   clients = wsClients;
   if (ticker) { ticker.disconnect(); ticker = null; }
 
@@ -22,7 +26,9 @@ function startTicker(wsClients, tokens = []) {
 
   ticker.on("connect", () => {
     console.log("[Ticker] Connected");
+    const tokens = [...subscribedTokens];
     if (tokens.length) { ticker.subscribe(tokens); ticker.setMode(ticker.modeFull, tokens); }
+    console.log(`[Ticker] Subscribed ${tokens.length} tokens (incl. ${INDEX_TOKENS.length} indices)`);
   });
 
   ticker.on("disconnect", e  => console.log("[Ticker] Disconnected", e?.message ?? ""));
@@ -34,7 +40,9 @@ function startTicker(wsClients, tokens = []) {
 function stopTicker() { if (ticker) { ticker.disconnect(); ticker = null; } }
 
 function subscribeTokens(tokens) {
-  if (!ticker || !tokens?.length) return;
+  if (!tokens?.length) return;
+  tokens.forEach(t => subscribedTokens.add(t));
+  if (!ticker) return;
   ticker.subscribe(tokens);
   ticker.setMode(ticker.modeFull, tokens);
 }

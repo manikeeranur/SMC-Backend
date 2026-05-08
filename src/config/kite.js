@@ -3,6 +3,9 @@ require("dotenv").config();
 
 let kc = null;
 let accessToken = null;
+let _onTokenSet = null;
+
+function onAccessTokenSet(cb) { _onTokenSet = cb; }
 
 function getClient() {
   if (!kc) {
@@ -15,6 +18,7 @@ function setAccessToken(token) {
   console.log(`[Auth] Setting access token: ${token}`);
   accessToken = token;
   getClient().setAccessToken(token);
+  if (_onTokenSet) _onTokenSet(token);
 }
 
 function getAccessToken() { return accessToken; }
@@ -39,4 +43,4 @@ try {
   }
 } catch {}
 
-module.exports = { getClient, setAccessToken, getAccessToken, isAuthenticated, clearToken };
+module.exports = { getClient, setAccessToken, getAccessToken, isAuthenticated, clearToken, onAccessTokenSet };
