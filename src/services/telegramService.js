@@ -309,4 +309,4 @@ function sendStartupPing() {
   ].join("\n"));
 }
 
-module.exports = { sendSMCAlert, sendResultAlert, sendBacktestResults, sendSessionSummary, sendStartupPing, sendSessionOpen, sendSessionClose, sendAutoTradeStarted, sendAutoTradeStopped, sendAutoTradeOrder, isConfigured };
+module.exports = { sendSMCAlert, sendResultAlert, sendBacktestResults, sendSessionSummary, sendStartupPing, sendSessionOpen, sendSessionClose, sendAutoTradeStarted, sendAutoTradeStopped, sendAutoTradeOrder, isConfigured, post, postChunked, exitReason };

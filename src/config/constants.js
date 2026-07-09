@@ -29,7 +29,20 @@ const FALLBACK2_MIN = Math.round(MIN_PREMIUM * 0.50);
 const FALLBACK2_MAX = Math.round(MAX_PREMIUM * 2.00);
 const SWEET_SPOT    = Math.round((MIN_PREMIUM + MAX_PREMIUM) / 2);
 
+// ─── VWAP 9:30 Strategy ─────────────────────────────────────────────────────────
+// Exact 09:30 IST entry only · CE/PE whose premium is ₹130–₹150 AND price is
+// touching/above its own VWAP · single entry per day · Target +30% / SL −8%
+const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 130;
+const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 150;
+const VWAP930_SL_PCT      = 8;   // stop loss  −8%
+const VWAP930_TARGET_PCT  = 30;  // target     +30%
+const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
+const VWAP930_ENTRY_HOUR  = 9;
+const VWAP930_ENTRY_MIN   = 30;
+
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,
   MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT,
+  VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM, VWAP930_SL_PCT, VWAP930_TARGET_PCT,
+  VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MIN,
 };

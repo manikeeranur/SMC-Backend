@@ -12,13 +12,15 @@ const analysisRoutes    = require("./src/routes/analysis");
 const watchlistRoutes   = require("./src/routes/watchlist");
 const smcRoutes         = require("./src/routes/smc");
 const autoTradeRoutes   = require("./src/routes/autoTrade");
+const vwap930Routes           = require("./src/routes/vwap930");
+const vwap930AutoTradeRoutes  = require("./src/routes/vwap930AutoTrade");
 const resultsRoutes     = require("./src/routes/results");
 const accountRoutes     = require("./src/routes/account");
 const { eodSnapshot }   = require("./src/routes/account");
 const { startTicker, stopTicker, subscribeTokens } = require("./src/websocket/ticker");
 const { isAuthenticated, onAccessTokenSet } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
-const { syncAlerts }      = require("./src/services/dbSyncService");
+const { syncAlerts, syncVwap930Alerts } = require("./src/services/dbSyncService");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -34,6 +36,8 @@ app.use("/api/analysis", analysisRoutes);
 app.use("/api/watchlist", watchlistRoutes);
 app.use("/api/smc", smcRoutes);
 app.use("/api/auto-trade", autoTradeRoutes);
+app.use("/api/vwap930", vwap930Routes);
+app.use("/api/vwap930-auto-trade", vwap930AutoTradeRoutes);
 app.use("/api/results", resultsRoutes);
 app.use("/api/account", accountRoutes);
 
@@ -115,6 +119,20 @@ schedule.scheduleJob({ rule: "* 9-15 * * 1-5", tz: "Asia/Kolkata" }, async () =>
   }
 });
 
+// ─── VWAP 9:30 Scanner — fires exactly once, at 09:30 AM IST, Mon–Fri ─────────
+schedule.scheduleJob({ rule: "30 9 * * 1-5", tz: "Asia/Kolkata" }, async () => {
+  if (!isAuthenticated()) return;
+  try {
+    const { getLiveExpiries } = require("./src/services/kiteService");
+    const expiries = await getLiveExpiries().catch(() => []);
+    if (!expiries.length) return;
+    const expiry = expiries[0]; // nearest weekly expiry
+    await vwap930Routes.doScan(expiry);
+  } catch (err) {
+    console.error("[VWAP930 Cron] Error:", err.message);
+  }
+});
+
 // ─── 9:15 AM IST — Session open notification ──────────────────────────────────
 schedule.scheduleJob({ rule: "15 9 * * 1-5", tz: "Asia/Kolkata" }, () => {
   const { sendSessionOpen } = require("./src/services/telegramService");
@@ -191,6 +209,19 @@ schedule.scheduleJob({ rule: "21 15 * * 1-5", tz: "Asia/Kolkata" }, async () => 
   } catch (err) {
     console.error("[SMC Session Summary] Error:", err.message);
   }
+
+  try {
+    const { sendVwap930SessionSummary } = require("./src/services/vwap930Telegram");
+    const todayVwapAlerts = vwap930Routes.getTodayAlerts();
+    if (todayVwapAlerts.length) {
+      console.log(
+        `[VWAP930] Sending session summary — ${todayVwapAlerts.length} trade(s)`,
+      );
+      await sendVwap930SessionSummary(todayVwapAlerts);
+    }
+  } catch (err) {
+    console.error("[VWAP930 Session Summary] Error:", err.message);
+  }
 });
 
 // ─── MongoDB: connect on startup + sync alerts every second ──────────────────
@@ -198,6 +229,9 @@ connectDB();
 setInterval(() => {
   const all = smcRoutes.getAllAlerts?.() ?? [];
   if (all.length) syncAlerts(all).catch(() => {});
+
+  const allVwap = vwap930Routes.getAllAlerts?.() ?? [];
+  if (allVwap.length) syncVwap930Alerts(allVwap).catch(() => {});
 }, 1000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
