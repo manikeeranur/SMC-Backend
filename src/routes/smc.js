@@ -21,6 +21,10 @@ const MAX_ALERTS    = 100;
 const COOLDOWN_MS   = 3 * 60 * 1000;  // 3 min per (strike+direction)
 const MAX_TRADES_PER_DAY = 25;
 
+// instrument token → alertId, for O(1) tick-driven SL/Target lookup. Populated
+// when an alert is created (and on Mongo-restore), removed once it exits.
+const activeTokenIndex = new Map();
+
 // Returns time in HH:MM (IST) format
 function timeKey() {
   return new Date().toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
@@ -36,6 +40,38 @@ function isDuplicate(alert) {
   );
 }
 
+// ─── Apply a new LTP to one alert — the single place that decides ACTIVE→exit.
+// Called from both the cron/poll path (`source: "cron"`) and the tick monitor
+// (`source: "tick"`). Mutates `alerts[idx]` synchronously and, if this call is
+// the one that flips status away from ACTIVE, fires the exit side-effects.
+// Because Node runs this fully synchronously (no `await` in between the status
+// check and the write), whichever caller gets here first wins — the other
+// path's own `status !== "ACTIVE"` check on its next pass will see the flip
+// and skip, so there is no double-exit race.
+function applyLtpToAlert(idx, ltp, source = "cron") {
+  const a = alerts[idx];
+  if (!a || a.status !== "ACTIVE") return;
+
+  const updated = updateAlertPnL(a, ltp);
+  alerts[idx] = { ...updated, leg: { ...a.leg, ltp } };
+
+  if (updated.status !== "ACTIVE") {
+    if (a.leg?.token) activeTokenIndex.delete(a.leg.token);
+    console.log(`[SMC][${source}] Exit trigger — ${a.id} ${updated.status} @ ₹${ltp}`);
+    sendResultAlert(updated);
+    autoTrade.executeExit(updated).catch(() => {});
+  }
+}
+
+// ─── Tick-driven fast path — O(1) lookup, no-op for the vast majority of ticks
+function handleTick(token, ltp) {
+  const alertId = activeTokenIndex.get(token);
+  if (!alertId) return;
+  const idx = alerts.findIndex(a => a.id === alertId);
+  if (idx === -1) { activeTokenIndex.delete(token); return; }
+  applyLtpToAlert(idx, ltp, "tick");
+}
+
 // ─── Update P&L for all ACTIVE alerts using latest chain data ────────────────
 async function refreshActivePnL(expiry) {
   const active = alerts.filter(a => a.status === "ACTIVE");
@@ -43,23 +79,14 @@ async function refreshActivePnL(expiry) {
 
   try {
     const chain = await buildOptionChain(expiry, 15);
-
-    alerts = alerts.map(a => {
-      if (a.status !== "ACTIVE") return a;
+    for (let idx = 0; idx < alerts.length; idx++) {
+      const a = alerts[idx];
+      if (a.status !== "ACTIVE") continue;
       const row    = chain.rows.find(r => r.strike === a.strike);
       const newLeg = a.direction === "CE" ? row?.ce : row?.pe;
-      if (!newLeg) return a;
-
-      const updated = updateAlertPnL(a, newLeg.leg?.ltp ?? newLeg.ltp);
-
-      // Fire Telegram + auto-trade exit when status changes
-      if (updated.status !== "ACTIVE" && a.status === "ACTIVE") {
-        sendResultAlert(updated);
-        autoTrade.executeExit(updated).catch(() => {});
-      }
-
-      return { ...updated, leg: { ...a.leg, ltp: newLeg.ltp ?? a.leg.ltp } };
-    });
+      if (!newLeg) continue;
+      applyLtpToAlert(idx, newLeg.leg?.ltp ?? newLeg.ltp, "cron");
+    }
   } catch { /* ignore — keep stale data */ }
 }
 
@@ -111,6 +138,7 @@ async function doScan(expiry) {
     // 5. Add to alerts list
     alerts.unshift(result);
     if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS;
+    if (result.leg?.token) activeTokenIndex.set(result.leg.token, result.id);
     saveAlert(result).catch(() => {}); // persist to MongoDB
 
     console.log(`[SMC] ✅ Alert: ${result.direction} ${result.strike} @ ₹${result.rr.entry}  [${result.concepts.join("+")}]  strength=${result.strength}`);
@@ -182,10 +210,13 @@ router.get("/alerts", async (req, res) => {
             t1Hit: d.t1Hit, t1HitTime: d.t1HitTime,
             lastLtp: d.lastLtp, createdAt: d.createdAt,
             tradingsymbol: d.tradingsymbol ?? null,
-            leg: d.tradingsymbol ? { tradingsymbol: d.tradingsymbol, strike: d.strike, type: d.direction } : undefined,
+            leg: d.tradingsymbol ? { tradingsymbol: d.tradingsymbol, token: d.token ?? null, strike: d.strike, type: d.direction } : undefined,
           }));
           alerts = [...alerts, ...restored];
           if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS;
+          for (const r of restored) {
+            if (r.status === "ACTIVE" && r.leg?.token) activeTokenIndex.set(r.leg.token, r.id);
+          }
           console.log(`[SMC] Synced ${missing.length} missing alerts from MongoDB (total: ${alerts.length})`);
         }
       }
@@ -226,6 +257,7 @@ router.post("/scan", async (req, res) => {
 // DELETE /api/smc/clear
 router.delete("/clear", (req, res) => {
   alerts = [];
+  activeTokenIndex.clear();
   res.json({ cleared: true });
 });
 
@@ -295,3 +327,4 @@ module.exports                = router;
 module.exports.doScan         = doScan;
 module.exports.getTodayAlerts = getTodayAlerts;
 module.exports.getAllAlerts    = () => alerts;
+module.exports.handleTick     = handleTick;

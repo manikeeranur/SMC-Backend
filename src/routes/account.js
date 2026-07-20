@@ -4,6 +4,7 @@ const express   = require("express");
 const router    = express.Router();
 const { getClient, isAuthenticated } = require("../config/kite");
 const autoTrade = require("./autoTrade");
+const vwap930AutoTrade = require("./vwap930AutoTrade");
 const DailyPnL  = require("../models/DailyPnL");
 const { isConnected } = require("../config/db");
 const { EXCHANGE, PRODUCT } = require("../config/constants");
@@ -101,7 +102,7 @@ async function fetchKiteCharges(client, orders) {
 // ─── FIFO position builder — uses getQuote() for real-time LTP ───────────────
 // getPositions().last_price is stale (REST snapshot); getQuote() gives live LTP
 async function buildPositionsFromData(client, dayPositions, trades) {
-  const atPositions = autoTrade.getPositions();
+  const atPositions = [...autoTrade.getPositions(), ...vwap930AutoTrade.getPositions()];
 
   // Build per-order fill summary, storing exchange per order
   const orderMap = {};

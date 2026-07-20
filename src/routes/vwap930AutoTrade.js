@@ -7,7 +7,7 @@ const {
   sendVwap930AutoTradeStarted, sendVwap930AutoTradeStopped, sendVwap930AutoTradeOrder,
 } = require("../services/vwap930Telegram");
 const { LOT_SIZE, VWAP930_NUM_LOTS, EXCHANGE, PRODUCT } = require("../config/constants");
-const ORDER_QTY = LOT_SIZE * VWAP930_NUM_LOTS;
+const settingsService = require("../services/settingsService");
 
 // ─── State — independent from the SMC auto-trade engine ─────────────────────
 let enabled   = false;
@@ -28,8 +28,47 @@ async function executeEntry(alert) {
   const { id: alertId, leg, rr } = alert;
   if (!leg?.tradingsymbol) { console.warn("[VWAP930 AutoTrade] No tradingsymbol on leg — skipping"); return; }
 
+  const defaults = settingsService.getCached().accountDefaults;
+  const orderQty = LOT_SIZE * (defaults.quantity ?? VWAP930_NUM_LOTS);
+  const product  = defaults.productType ?? PRODUCT;
+  const isPaper  = defaults.tradingMode === "PAPER";
+
+  // Account-tab defaults override the strategy's own %-based SL/Target, in
+  // place on the shared alert.rr object (same object the exit-check logic
+  // reads — cron poll today, tick monitor going forward).
+  if (defaults.stopLoss != null) rr.sl = +(rr.entry - defaults.stopLoss).toFixed(2);
+  if (defaults.target   != null) rr.target = +(rr.entry + defaults.target).toFixed(2);
+
   if (positions.some(p => p.alertId === alertId)) {
     console.warn(`[VWAP930 AutoTrade] Duplicate entry blocked — ${alertId} already tracked`);
+    return;
+  }
+
+  const sym = leg.tradingsymbol;
+
+  const pos = {
+    alertId,
+    tradingsymbol: sym,
+    strike:        leg.strike,
+    direction:     alert.direction,
+    token:         leg.token,
+    entryOrderId:  null,
+    slOrderId:     null,
+    exitOrderId:   null,
+    status:        "PENDING",
+    rr,
+    logs:          [],
+  };
+  positions.unshift(pos);
+
+  // ── PAPER mode: simulate the fill, never touch the broker ────────────────────
+  if (isPaper) {
+    pos.entryOrderId = `PAPER-${Date.now()}`;
+    pos.slOrderId    = `PAPER-SL-${Date.now()}`;
+    pos.status = "ACTIVE";
+    log(alertId, `[PAPER] Simulated entry — ${sym} BUY ${orderQty} @ ₹${rr.entry}, SL trigger ₹${rr.sl}`);
+    sendVwap930AutoTradeOrder(pos, "ENTRY");
+    require("../websocket/ticker").subscribeTokens([leg.token]);
     return;
   }
 
@@ -40,35 +79,20 @@ async function executeEntry(alert) {
     );
     if (already) {
       console.warn(`[VWAP930 AutoTrade] Entry blocked — open Kite position already exists for ${leg.tradingsymbol}`);
+      pos.status = "ERROR";
       return;
     }
   } catch (e) {
     console.warn(`[VWAP930 AutoTrade] Could not check Kite positions — ${e.message}. Proceeding.`);
   }
 
-  const sym = leg.tradingsymbol;
-
-  const pos = {
-    alertId,
-    tradingsymbol: sym,
-    strike:        leg.strike,
-    direction:     alert.direction,
-    entryOrderId:  null,
-    slOrderId:     null,
-    exitOrderId:   null,
-    status:        "PENDING",
-    rr,
-    logs:          [],
-  };
-  positions.unshift(pos);
-
   try {
     const entryResp = await getClient().placeOrder("regular", {
       exchange:          EXCHANGE,
       tradingsymbol:     sym,
       transaction_type:  "BUY",
-      quantity:          ORDER_QTY,
-      product:           PRODUCT,
+      quantity:          orderQty,
+      product:           product,
       order_type:        "MARKET",
       validity:          "DAY",
       market_protection: 1,
@@ -76,14 +100,14 @@ async function executeEntry(alert) {
     });
     pos.entryOrderId = entryResp.order_id;
     pos.status = "ENTRY_PLACED";
-    log(alertId, `Entry order placed — ${sym} BUY ${ORDER_QTY} (${VWAP930_NUM_LOTS} lot${VWAP930_NUM_LOTS > 1 ? "s" : ""}) @ MARKET  [order_id: ${entryResp.order_id}]`);
+    log(alertId, `Entry order placed — ${sym} BUY ${orderQty} @ MARKET  [order_id: ${entryResp.order_id}]`);
 
     const slResp = await getClient().placeOrder("regular", {
       exchange:          EXCHANGE,
       tradingsymbol:     sym,
       transaction_type:  "SELL",
-      quantity:          ORDER_QTY,
-      product:           PRODUCT,
+      quantity:          orderQty,
+      product:           product,
       order_type:        "SL-M",
       trigger_price:     rr.sl,
       validity:          "DAY",
@@ -94,6 +118,7 @@ async function executeEntry(alert) {
     pos.status = "ACTIVE";
     log(alertId, `SL order placed — trigger ₹${rr.sl}  [order_id: ${slResp.order_id}]`);
     sendVwap930AutoTradeOrder(pos, "ENTRY");
+    require("../websocket/ticker").subscribeTokens([leg.token]);
 
   } catch (err) {
     pos.status = "ERROR";
@@ -116,7 +141,28 @@ async function executeExit(alert) {
     return;
   }
 
+  // Post-restart safety net: with no in-memory `pos` we can't tell whether this
+  // position's entry was ever really sent to the broker. If the app is
+  // currently in PAPER mode, never risk placing a real order for it.
+  if (!pos && settingsService.getCached().accountDefaults.tradingMode === "PAPER") {
+    console.log(`[VWAP930 AutoTrade] [PAPER] Simulated exit (post-restart) — ${tradingsymbol} ${alert.status}`);
+    return;
+  }
+
   if (pos) pos.status = "EXITING";
+
+  // ── PAPER mode: this position was simulated at entry — simulate the exit too
+  if (pos?.entryOrderId?.startsWith("PAPER-")) {
+    pos.exitOrderId = `PAPER-EXIT-${Date.now()}`;
+    pos.status = `EXITED_${alert.status}`;
+    log(pos.alertId, `[PAPER] Simulated exit — ${alert.status}`);
+    sendVwap930AutoTradeOrder(pos, "EXIT");
+    return;
+  }
+
+  const defaults = settingsService.getCached().accountDefaults;
+  const orderQty = LOT_SIZE * (defaults.quantity ?? VWAP930_NUM_LOTS);
+  const product  = defaults.productType ?? PRODUCT;
 
   try {
     let slAlreadyExecuted = false;
@@ -183,8 +229,8 @@ async function executeExit(alert) {
       exchange:          EXCHANGE,
       tradingsymbol,
       transaction_type:  "SELL",
-      quantity:          ORDER_QTY,
-      product:           PRODUCT,
+      quantity:          orderQty,
+      product:           product,
       order_type:        "MARKET",
       validity:          "DAY",
       market_protection: 1,
@@ -216,14 +262,24 @@ router.get("/status", (req, res) => {
   res.json({ enabled, positions });
 });
 
-router.post("/enable", (req, res) => {
+router.post("/enable", async (req, res) => {
+  try {
+    await settingsService.setAutoTradeEnabled("vwap930", true);
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to persist enable state: ${err.message}` });
+  }
   enabled = true;
   console.log("[VWAP930 AutoTrade] ✅ Enabled");
   sendVwap930AutoTradeStarted();
   res.json({ enabled });
 });
 
-router.post("/disable", (req, res) => {
+router.post("/disable", async (req, res) => {
+  try {
+    await settingsService.setAutoTradeEnabled("vwap930", false);
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to persist disable state: ${err.message}` });
+  }
   enabled = false;
   console.log("[VWAP930 AutoTrade] ❌ Disabled");
   sendVwap930AutoTradeStopped();
@@ -240,3 +296,4 @@ module.exports.executeEntry = executeEntry;
 module.exports.executeExit  = executeExit;
 module.exports.isEnabled    = () => enabled;
 module.exports.getPositions = () => positions;
+module.exports.setEnabled   = (v) => { enabled = v; };

@@ -17,10 +17,12 @@ const vwap930AutoTradeRoutes  = require("./src/routes/vwap930AutoTrade");
 const resultsRoutes     = require("./src/routes/results");
 const accountRoutes     = require("./src/routes/account");
 const { eodSnapshot }   = require("./src/routes/account");
+const settingsRoutes    = require("./src/routes/settings");
 const { startTicker, stopTicker, subscribeTokens } = require("./src/websocket/ticker");
 const { isAuthenticated, onAccessTokenSet } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
 const { syncAlerts, syncVwap930Alerts } = require("./src/services/dbSyncService");
+const settingsService    = require("./src/services/settingsService");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -40,6 +42,7 @@ app.use("/api/vwap930", vwap930Routes);
 app.use("/api/vwap930-auto-trade", vwap930AutoTradeRoutes);
 app.use("/api/results", resultsRoutes);
 app.use("/api/account", accountRoutes);
+app.use("/api/settings", settingsRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -225,7 +228,14 @@ schedule.scheduleJob({ rule: "21 15 * * 1-5", tz: "Asia/Kolkata" }, async () => 
 });
 
 // ─── MongoDB: connect on startup + sync alerts every second ──────────────────
-connectDB();
+connectDB().then(async (ok) => {
+  if (!ok) return;
+  const settings = await settingsService.loadOrCreate().catch(() => null);
+  if (!settings) return;
+  autoTradeRoutes.setEnabled(settings.smcAutoTradeEnabled);
+  vwap930AutoTradeRoutes.setEnabled(settings.vwap930AutoTradeEnabled);
+  console.log(`[Boot] Restored auto-trade — SMC:${settings.smcAutoTradeEnabled} VWAP930:${settings.vwap930AutoTradeEnabled}`);
+});
 setInterval(() => {
   const all = smcRoutes.getAllAlerts?.() ?? [];
   if (all.length) syncAlerts(all).catch(() => {});

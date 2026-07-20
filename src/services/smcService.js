@@ -4,6 +4,7 @@ const { getClient, isAuthenticated } = require("../config/kite");
 const { getATM }                      = require("./kiteService");
 const { buildOptionChain }            = require("./optionChainService");
 const { MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT } = require("../config/constants");
+const { checkPriceTouch } = require("./priceTouchUtil");
 
 const NIFTY_TOKEN = 256265; // NSE:NIFTY 50 index
 
@@ -323,8 +324,9 @@ function updateAlertPnL(alert, currentLtp) {
       t1HitTime = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" });
     }
 
-    if      (currentLtp <= alert.rr.sl)                        status = "SL";
-    else if (currentLtp >= alert.rr.target2)                   status = "TARGET";
+    const touch = checkPriceTouch(alert.rr, currentLtp, "target2");
+    if      (touch === "SL")                                   status = "SL";
+    else if (touch === "TARGET")                                status = "TARGET";
     else if (h === 15 && m >= 20)                              status = "TIME_EXIT";
     else if (elapsedMin >= 60 && currentLtp > alert.rr.entry)  status = "TIME_PROFIT";
     else if (elapsedMin >= 75)                                  status = "TIME_EXIT";

@@ -9,6 +9,7 @@ const {
   VWAP930_SL_PCT, VWAP930_TARGET_PCT,
   VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MIN,
 } = require("../config/constants");
+const { checkPriceTouch } = require("./priceTouchUtil");
 
 const NIFTY_TOKEN = 256265; // NSE:NIFTY 50 index
 
@@ -147,8 +148,9 @@ function updateAlertPnL(alert, currentLtp) {
   if (alert.status === "ACTIVE") {
     const now = new Date();
     const h = now.getHours(), m = now.getMinutes();
-    if      (currentLtp <= alert.rr.sl)     status = "SL";
-    else if (currentLtp >= alert.rr.target) status = "TARGET";
+    const touch = checkPriceTouch(alert.rr, currentLtp, "target");
+    if      (touch === "SL")                status = "SL";
+    else if (touch === "TARGET")            status = "TARGET";
     else if (h === 15 && m >= 20)           status = "TIME_EXIT";
   }
 

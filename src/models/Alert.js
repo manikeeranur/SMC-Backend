@@ -4,6 +4,7 @@ const AlertSchema = new mongoose.Schema({
   alertId:       { type: String, required: true, unique: true }, // a.id
   date:          { type: String, required: true },               // IST date YYYY-MM-DD
   tradingsymbol: String,                                         // leg.tradingsymbol for exit
+  token:         Number,                                         // leg.token — instrument token, for tick-exit restore
   direction:     String,
   strike:        Number,
   expiry:        String,
