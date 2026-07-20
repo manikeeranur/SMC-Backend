@@ -20,8 +20,9 @@ const DEFAULTS = {
     target:      null,
     quantity:    10,
     productType: "MIS",
-    tradingMode: "LIVE",
+    tradingMode: "PAPER",
   },
+  globalLock: { on: false, pts: null },
 };
 
 let cached = DEFAULTS;
@@ -86,6 +87,30 @@ async function patchAccountDefaults(patch) {
   }
 }
 
+async function setGlobalLock(patch) {
+  if (patch.pts != null && (typeof patch.pts !== "number" || Number.isNaN(patch.pts))) {
+    throw Object.assign(new Error("pts must be a number or null"), { status: 400 });
+  }
+  cached = { ...cached, globalLock: { ...cached.globalLock, ...patch } };
+  if (!isConnected()) return cached;
+
+  const set = { updatedAt: new Date() };
+  for (const [k, v] of Object.entries(patch)) set[`globalLock.${k}`] = v;
+
+  try {
+    const doc = await Settings.findOneAndUpdate(
+      { key: "global" },
+      { $set: set },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+    cached = doc;
+    return doc;
+  } catch (err) {
+    console.error("[Settings] setGlobalLock error:", err.message);
+    return cached;
+  }
+}
+
 // engine: "smc" | "vwap930" — throws on DB failure so the route can surface a
 // 500 instead of silently diverging from the DB (Auto Trade on/off must never
 // look like it worked when it didn't persist).
@@ -107,4 +132,4 @@ async function setAutoTradeEnabled(engine, enabled) {
   }
 }
 
-module.exports = { loadOrCreate, patchAccountDefaults, setAutoTradeEnabled, getCached };
+module.exports = { loadOrCreate, patchAccountDefaults, setAutoTradeEnabled, setGlobalLock, getCached };

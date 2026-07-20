@@ -153,6 +153,28 @@ async function executeExit(alert) {
     return;
   }
 
+  // Second safety net: a scanner alert with no in-memory `pos` might mean
+  // "position survived a restart" (real, needs exiting) OR "Auto Trade was
+  // never on for this alert, nothing was ever bought" — those look identical
+  // from here. Without this check, the latter would fall through to placing a
+  // real MARKET SELL for a symbol never bought, opening an unintended naked
+  // short. Confirm a real open Kite position exists before proceeding; fail
+  // safe (skip) if we can't confirm one — the broker's own SL-M order is the
+  // real protection for any genuine open position, independent of this check.
+  if (!pos) {
+    try {
+      const { net } = await getClient().getPositions();
+      const held = (net || []).some(p => p.tradingsymbol === tradingsymbol && Math.abs(p.quantity) > 0);
+      if (!held) {
+        console.log(`[AutoTrade] Exit skipped — no real open position for ${tradingsymbol} (never entered or already flat)`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[AutoTrade] Could not verify open position before exit — ${e.message}. Skipping to avoid a blind SELL.`);
+      return;
+    }
+  }
+
   // Mark pos early to prevent double-exit if executeExit fires twice
   if (pos) pos.status = "EXITING";
 

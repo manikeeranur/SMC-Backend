@@ -283,6 +283,7 @@ async function buildAccountData() {
         trigger_price:    +(o.trigger_price || 0).toFixed(2),
         order_type:       o.order_type,
         status:           o.status,
+        status_message:   o.status_message || null,
         time:             toISTTime(rawTs),
         _ts:              rawTs ? new Date(rawTs).getTime() : 0,
       };
