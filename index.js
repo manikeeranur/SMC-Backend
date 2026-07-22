@@ -18,6 +18,7 @@ const resultsRoutes     = require("./src/routes/results");
 const accountRoutes     = require("./src/routes/account");
 const { eodSnapshot }   = require("./src/routes/account");
 const settingsRoutes    = require("./src/routes/settings");
+const holidaysRoutes    = require("./src/routes/holidays");
 const { startTicker, stopTicker, subscribeTokens } = require("./src/websocket/ticker");
 const { isAuthenticated, onAccessTokenSet } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
@@ -43,6 +44,7 @@ app.use("/api/vwap930-auto-trade", vwap930AutoTradeRoutes);
 app.use("/api/results", resultsRoutes);
 app.use("/api/account", accountRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/holidays", holidaysRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
