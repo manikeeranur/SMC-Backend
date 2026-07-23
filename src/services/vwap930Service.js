@@ -7,7 +7,7 @@ const { latestVWAP, calcVWAP }        = require("../utils/vwap");
 const {
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM,
   VWAP930_SL_PCT, VWAP930_TARGET_PCT,
-  VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MIN,
+  VWAP930_WINDOW_START_MIN, VWAP930_WINDOW_END_MIN,
 } = require("../config/constants");
 const { checkPriceTouch } = require("./priceTouchUtil");
 
@@ -83,15 +83,23 @@ function decideDirection(ce, pe, vwapCE, vwapPE) {
     : { direction: "PE", leg: pe, vwap: vwapPE };
 }
 
-// ─── Main scan — must fire exactly at 09:30 IST ──────────────────────────────
+// ─── Main scan — fires anywhere in the 09:26 IST–12:00 PM entry window ───────
+// (widened from an exact-09:30-only check, which meant a single missed cron
+// tick produced zero entries for the whole day — see index.js's per-minute
+// schedule over this same window, and keeps retrying until noon if no valid
+// signal has fired yet). The daily-limit/open-position gates in
+// vwap930.js's doScan() already guarantee only one entry is ever taken,
+// regardless of window width.
 async function runVWAP930Scan(expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
   const now = new Date();
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes();
-  if (h !== VWAP930_ENTRY_HOUR || m !== VWAP930_ENTRY_MIN) {
-    return { signal: false, reason: `Entry window is exactly ${String(VWAP930_ENTRY_HOUR).padStart(2,"0")}:${String(VWAP930_ENTRY_MIN).padStart(2,"0")} IST (now ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")})` };
+  const nowMin = h * 60 + m;
+  if (nowMin < VWAP930_WINDOW_START_MIN || nowMin > VWAP930_WINDOW_END_MIN) {
+    const fmt = mins => `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+    return { signal: false, reason: `Entry window is ${fmt(VWAP930_WINDOW_START_MIN)}–${fmt(VWAP930_WINDOW_END_MIN)} IST (now ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")})` };
   }
 
   const { ce, pe, spot } = await findCandidateLegs(expiry);
@@ -163,22 +171,28 @@ function updateAlertPnL(alert, currentLtp) {
 }
 
 // ─── Historical / Backtest scan — single day, at most one trade ─────────────
+// Mirrors the live 09:26–12:00 retry window (see runVWAP930Scan): instead of
+// checking only the exact 09:30 candle and giving up, walks every candle in
+// the window and takes the first one where CE or PE actually qualifies —
+// otherwise backtest results silently diverge from what live now does
+// (fewer "no entry" days, entries not always pinned to exactly 09:30).
 async function runHistoricalVWAP930Scan(date, expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
   const from = new Date(date); from.setHours(9, 15, 0, 0);
   const to   = new Date(date); to.setHours(15, 30, 0, 0);
-  const entryMark = new Date(date); entryMark.setHours(VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MIN, 0, 0);
+  const windowStart = new Date(date); windowStart.setHours(Math.floor(VWAP930_WINDOW_START_MIN / 60), VWAP930_WINDOW_START_MIN % 60, 0, 0);
+  const windowEnd   = new Date(date); windowEnd.setHours(Math.floor(VWAP930_WINDOW_END_MIN / 60),   VWAP930_WINDOW_END_MIN % 60,   0, 0);
 
-  // 1. NIFTY spot candles to find ATM at 09:30
+  // 1. NIFTY spot candle at window start, to find ATM
   const rawNifty = await getClient().getHistoricalData(NIFTY_TOKEN, "minute", from, to, false, false);
   if (!rawNifty || rawNifty.length < 6)
     throw new Error(`No NIFTY candle data for ${date}. Market may have been closed.`);
 
-  const entryNiftyCandle = rawNifty.find(c => new Date(c.date).getTime() >= entryMark.getTime());
+  const entryNiftyCandle = rawNifty.find(c => new Date(c.date).getTime() >= windowStart.getTime());
   if (!entryNiftyCandle) {
     return { results: [], date, expiry, totalSignals: 0, wins: 0, losses: 0, winRate: null,
-      message: "No NIFTY candle at 09:30 for this date" };
+      message: "No NIFTY candle in the entry window for this date" };
   }
   const spot = entryNiftyCandle.open;
   const atm  = getATM(spot);
@@ -201,29 +215,36 @@ async function runHistoricalVWAP930Scan(date, expiry) {
       const raw = await getClient().getHistoricalData(token, "minute", from, to, false, true).catch(() => []);
       if (!raw || raw.length < 6) continue;
       const candles = raw.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, date: c.date }));
-      const entryIdx = candles.findIndex(c => new Date(c.date).getTime() >= entryMark.getTime());
-      if (entryIdx < 5) continue; // need ≥5 completed candles before entry (09:15 onwards)
-      const entryCandle = candles[entryIdx];
-      const premium = entryCandle.open;
-      if (premium < VWAP930_MIN_PREMIUM || premium > VWAP930_MAX_PREMIUM) continue;
-      const completed = candles.slice(0, entryIdx);
-      const vwap = latestVWAP(completed);
-      return { strike, token, premium, vwap, entryCandle, entryIdx, candles };
+      const startIdx = candles.findIndex(c => new Date(c.date).getTime() >= windowStart.getTime());
+      if (startIdx < 5) continue; // need ≥5 completed candles before the window starts (09:15 onwards)
+      let endIdx = candles.findIndex(c => new Date(c.date).getTime() > windowEnd.getTime());
+      if (endIdx < 0) endIdx = candles.length;
+
+      // Walk every candle in the window; take the first one that both sits
+      // in the premium band AND is touching/above its own VWAP so far.
+      for (let idx = startIdx; idx < endIdx; idx++) {
+        const entryCandle = candles[idx];
+        const premium = entryCandle.open;
+        if (premium < VWAP930_MIN_PREMIUM || premium > VWAP930_MAX_PREMIUM) continue;
+        const completed = candles.slice(0, idx);
+        const vwap = latestVWAP(completed);
+        if (premium >= vwap) return { strike, token, premium, vwap, entryCandle, entryIdx: idx, candles };
+      }
     }
     return null;
   }
 
   const [ceCand, peCand] = await Promise.all([fetchCandidate("CE"), fetchCandidate("PE")]);
 
-  const ceQualifies = ceCand && ceCand.premium >= ceCand.vwap;
-  const peQualifies = peCand && peCand.premium >= peCand.vwap;
+  // fetchCandidate only ever returns an already-qualified (in-band AND
+  // touching/above VWAP) candle, so a non-null result already qualifies.
+  const ceQualifies = !!ceCand;
+  const peQualifies = !!peCand;
 
   if (!ceQualifies && !peQualifies) {
     return {
       results: [], date, expiry, totalSignals: 0, wins: 0, losses: 0, winRate: null,
-      message: "No CE/PE in premium band touching/above VWAP at 09:30",
-      debug: { ce: ceCand ? { strike: ceCand.strike, premium: ceCand.premium, vwap: ceCand.vwap } : null,
-               pe: peCand ? { strike: peCand.strike, premium: peCand.premium, vwap: peCand.vwap } : null },
+      message: "No CE/PE ever entered the premium band touching/above VWAP during the entry window",
     };
   }
 
@@ -257,7 +278,8 @@ async function runHistoricalVWAP930Scan(date, expiry) {
 
   const pnl = +(exitPrice - entry).toFixed(2);
   const pct = +(pnl / entry * 100).toFixed(2);
-  const entryTimeStr = `${String(VWAP930_ENTRY_HOUR).padStart(2,"0")}:${String(VWAP930_ENTRY_MIN).padStart(2,"0")}`;
+  const entryTimeStr = new Date(chosen.entryCandle.date)
+    .toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
   const exitTimeStr = exitTime
     ? new Date(exitTime).toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
     : null;
