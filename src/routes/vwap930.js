@@ -6,7 +6,7 @@ const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL } = require("..
 const { buildOptionChain }           = require("../services/optionChainService");
 const { sendVwap930Alert, sendVwap930Result, sendVwap930BacktestResults } = require("../services/vwap930Telegram");
 const { isAuthenticated }            = require("../config/kite");
-const { VWAP930_WINDOW_START_MIN, VWAP930_WINDOW_END_MIN } = require("../config/constants");
+const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES } = require("../config/constants");
 const autoTrade                      = require("./vwap930AutoTrade");
 const { saveVwap930Alert, saveVwap930Backtest } = require("../services/dbSyncService");
 const Vwap930Alert         = require("../models/Vwap930Alert");
@@ -83,9 +83,9 @@ async function refreshActivePnL(expiry) {
   } catch { /* ignore — keep stale data */ }
 }
 
-// ─── Core scan + alert creation — called every minute across the entry
-// window (see index.js); the open-position/daily-limit gates below ensure
-// only the first successful fire within the window actually enters ────────
+// ─── Core scan + alert creation — called at each fixed entry checkpoint,
+// 09:30, 09:40, and 09:50 (see index.js); the open-position/daily-limit
+// gates below ensure only the first successful checkpoint actually enters ──
 async function doScan(expiry) {
   if (scanRunning) return;
   if (!isAuthenticated()) return;
@@ -146,9 +146,7 @@ router.get("/status", (req, res) => {
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes(), day = ist.getDay();
   const marketOpen = day >= 1 && day <= 5 && (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m <= 30));
-  const nowMin = h * 60 + m;
-  const scanActive = marketOpen
-    && nowMin >= VWAP930_WINDOW_START_MIN && nowMin <= VWAP930_WINDOW_END_MIN;
+  const scanActive = marketOpen && h === VWAP930_ENTRY_HOUR && VWAP930_ENTRY_MINUTES.includes(m);
   const today = todayIST();
   const tradedToday = alerts.some(a => {
     const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });

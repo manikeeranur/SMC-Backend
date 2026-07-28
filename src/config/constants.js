@@ -30,25 +30,22 @@ const FALLBACK2_MAX = Math.round(MAX_PREMIUM * 2.00);
 const SWEET_SPOT    = Math.round((MIN_PREMIUM + MAX_PREMIUM) / 2);
 
 // ─── VWAP 9:30 Strategy ─────────────────────────────────────────────────────────
-// Entry window 09:26 AM–12:00 PM IST · CE/PE whose premium is ₹130–₹150 AND
-// price is touching/above its own VWAP · single entry per day · Target +30% / SL −8%
+// Exact 09:30 IST entry only · CE/PE whose premium is ₹130–₹150 AND price is
+// touching/above its own VWAP · single entry per day · Target +30% / SL −8%
 const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 200; // 130;
 const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 300; // 150
 const VWAP930_SL_PCT      = 8;   // stop loss  −8%
 const VWAP930_TARGET_PCT  = 30;  // target     +30%
 const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
-// Live entry window, as total minutes since midnight IST (spans multiple
-// hours, so plain hour+minute-range checks don't work — compare totals
-// instead). An exact-minute-only gate meant a single missed cron tick (auth
-// not ready yet, backend restart, brief hiccup right at 9:30) silently
-// produced zero entries for the entire day; keep retrying every minute
-// until noon instead of giving up after one shot.
-const VWAP930_WINDOW_START_MIN = 9 * 60 + 21; // 09:21
-const VWAP930_WINDOW_END_MIN   = 12 * 60;     // 12:00
+const VWAP930_ENTRY_HOUR  = 9;
+// Two fixed checkpoints, checked in order — if 09:30 finds no qualifying
+// CE/PE, 09:45 gets one more try. Not a continuous window; still at most
+// one entry per day (see the daily-limit/open-position gates in vwap930.js).
+const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
 
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,
   MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT,
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM, VWAP930_SL_PCT, VWAP930_TARGET_PCT,
-  VWAP930_NUM_LOTS, VWAP930_WINDOW_START_MIN, VWAP930_WINDOW_END_MIN,
+  VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES,
 };

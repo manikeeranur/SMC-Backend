@@ -24,7 +24,7 @@ const { isAuthenticated, onAccessTokenSet } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
 const { syncAlerts, syncVwap930Alerts } = require("./src/services/dbSyncService");
 const settingsService    = require("./src/services/settingsService");
-const { VWAP930_WINDOW_START_MIN, VWAP930_WINDOW_END_MIN } = require("./src/config/constants");
+const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES } = require("./src/config/constants");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -125,20 +125,12 @@ schedule.scheduleJob({ rule: "* 9-15 * * 1-5", tz: "Asia/Kolkata" }, async () =>
   }
 });
 
-// ─── VWAP 9:30 Scanner — every minute across the 09:26 AM–12:00 PM IST entry
-// window, Mon–Fri (widened from a single 09:30 tick, which meant one missed
-// fire — auth not ready, a restart, a brief hiccup — silently produced zero
-// entries for the whole day; keeps retrying until noon if no valid signal
-// has fired yet. runVWAP930Scan's own window check plus doScan's
-// daily-limit/open-position gates still guarantee exactly one entry) ───────
-schedule.scheduleJob({ rule: "* 9-12 * * 1-5", tz: "Asia/Kolkata" }, async () => {
+// ─── VWAP 9:30 Scanner — fires at each checkpoint in VWAP930_ENTRY_MINUTES,
+// Mon–Fri IST, stopping at whichever one first finds a qualifying entry
+// (fixed checkpoints, not a continuous window). The cron rule is built from
+// that same constant, so it can never drift out of sync again. ─────────────
+schedule.scheduleJob({ rule: `${VWAP930_ENTRY_MINUTES.join(",")} ${VWAP930_ENTRY_HOUR} * * 1-5`, tz: "Asia/Kolkata" }, async () => {
   if (!isAuthenticated()) return;
-
-  const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const h = ist.getHours(), m = ist.getMinutes();
-  const nowMin = h * 60 + m;
-  if (nowMin < VWAP930_WINDOW_START_MIN || nowMin > VWAP930_WINDOW_END_MIN) return;
-
   try {
     const { getLiveExpiries } = require("./src/services/kiteService");
     const expiries = await getLiveExpiries().catch(() => []);
