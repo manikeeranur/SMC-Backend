@@ -6,7 +6,7 @@ const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL } = require("..
 const { buildOptionChain }           = require("../services/optionChainService");
 const { sendVwap930Alert, sendVwap930Result, sendVwap930BacktestResults } = require("../services/vwap930Telegram");
 const { isAuthenticated }            = require("../config/kite");
-const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY } = require("../config/constants");
+const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY, VWAP930_REENTRY_STATUSES } = require("../config/constants");
 const autoTrade                      = require("./vwap930AutoTrade");
 const { saveVwap930Alert, saveVwap930Backtest } = require("../services/dbSyncService");
 const Vwap930Alert         = require("../models/Vwap930Alert");
@@ -105,19 +105,20 @@ async function doScan(expiry) {
     }
 
     // Gate: at most MAX_TRADES_PER_DAY entries per calendar day (IST) — and
-    // a 2nd is only allowed if the 1st was stopped out (SL), never for any
-    // other exit reason.
+    // a re-entry is only allowed if the most recent one exited with a
+    // status in VWAP930_REENTRY_STATUSES (SL or a stagnant timeout), never
+    // for any other exit reason.
     const today = todayIST();
     const todaysAlerts = alerts.filter(a => {
       const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
       return d === today;
-    });
+    }); // newest first — alerts is unshift()-ordered
     if (todaysAlerts.length >= MAX_TRADES_PER_DAY) {
       console.log(`[VWAP930] Daily limit (${MAX_TRADES_PER_DAY}) reached — no new entries`);
       return;
     }
-    if (todaysAlerts.length === 1 && todaysAlerts[0].status !== "SL") {
-      console.log(`[VWAP930] First entry today exited ${todaysAlerts[0].status} (not SL) — no re-entry`);
+    if (todaysAlerts.length >= 1 && !VWAP930_REENTRY_STATUSES.includes(todaysAlerts[0].status)) {
+      console.log(`[VWAP930] Last entry today exited ${todaysAlerts[0].status} (not re-entry eligible) — no re-entry`);
       return;
     }
 

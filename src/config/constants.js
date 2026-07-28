@@ -47,16 +47,29 @@ const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
 const VWAP930_ENTRY_HOUR    = [9, 10, 11, 12, 13, 14, 15];
 const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
 // At most this many entries per day: the 1st at whichever checkpoint first
-// qualifies, and — only if that one gets stopped out (SL) before the
-// checkpoints run out — one re-entry at the next qualifying checkpoint. Any
-// other exit reason (TARGET/EOD/TIME_EXIT), or reaching this cap, ends the
-// day with no further entries. Shared by both live (vwap930.js) and
-// backtest (vwap930Service.js) so they can never drift apart.
+// qualifies, and — only if that one exits with a status in
+// VWAP930_REENTRY_STATUSES before the checkpoints run out — a re-entry at
+// the next qualifying checkpoint. Any other exit reason (TARGET/EOD/
+// TIME_EXIT), or reaching this cap, ends the day with no further entries.
+// Shared by both live (vwap930.js) and backtest (vwap930Service.js) so they
+// can never drift apart.
 const VWAP930_MAX_TRADES_PER_DAY = 3;
+// Force-exit a still-open position once it's been open this many hours AND
+// its peak favorable move (peakMove) has never reached this many points —
+// i.e. the trade has gone nowhere, so cut it loose instead of waiting for
+// SL/Target/3:20 PM square-off. Checked live (updateAlertPnL) and mirrored
+// in backtest (resolveOutcome) so both agree.
+const VWAP930_STAGNANT_HOURS      = 2;
+const VWAP930_STAGNANT_MAX_POINTS = 20;
+// Exit statuses that are allowed to trigger a re-entry (up to
+// VWAP930_MAX_TRADES_PER_DAY) — a clean SL, or a stagnant timeout, both
+// mean "that setup didn't work, try again"; TARGET/EOD/TIME_EXIT do not.
+const VWAP930_REENTRY_STATUSES = ["SL", "STAGNANT_EXIT"];
 
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,
   MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT,
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM, VWAP930_SL_PCT, VWAP930_TARGET_PCT,
   VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY,
+  VWAP930_STAGNANT_HOURS, VWAP930_STAGNANT_MAX_POINTS, VWAP930_REENTRY_STATUSES,
 };

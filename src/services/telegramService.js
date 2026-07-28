@@ -62,11 +62,12 @@ function sendSMCAlert(alert) {
 }
 
 function exitReason(status) {
-  return status === "TARGET"      ? "Target 2 Hit"
-    :    status === "SL"          ? "SL Hit"
-    :    status === "TIME_PROFIT" ? "60 Min Exit (Profit)"
-    :    status === "TIME_EXIT"   ? "75 Min / 3:20 PM Exit"
-    :    status === "EOD"         ? "End of Day"
+  return status === "TARGET"        ? "Target 2 Hit"
+    :    status === "SL"            ? "SL Hit"
+    :    status === "TIME_PROFIT"   ? "60 Min Exit (Profit)"
+    :    status === "TIME_EXIT"     ? "75 Min / 3:20 PM Exit"
+    :    status === "EOD"           ? "End of Day"
+    :    status === "STAGNANT_EXIT" ? "Stagnant — No Movement"
     :    status;
 }
 

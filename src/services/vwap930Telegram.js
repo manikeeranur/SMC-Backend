@@ -7,7 +7,7 @@ const { post, postChunked, exitReason, isConfigured } = require("./telegramServi
 const {
   LOT_SIZE, VWAP930_NUM_LOTS, VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM,
   VWAP930_SL_PCT, VWAP930_TARGET_PCT, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES,
-  VWAP930_MAX_TRADES_PER_DAY,
+  VWAP930_MAX_TRADES_PER_DAY, VWAP930_REENTRY_STATUSES,
 } = require("../config/constants");
 const ORDER_QTY = LOT_SIZE * VWAP930_NUM_LOTS;
 
@@ -84,7 +84,7 @@ async function sendVwap930BacktestResults(data) {
   });
   lines.push(
     ``,
-    `<i>Premium ₹${VWAP930_MIN_PREMIUM}–₹${VWAP930_MAX_PREMIUM} · VWAP touch/above · SL −${VWAP930_SL_PCT}% · Target +${VWAP930_TARGET_PCT}% · Entry @ ${checkpointsStr()} · re-entry only after SL · max ${VWAP930_MAX_TRADES_PER_DAY} trade${VWAP930_MAX_TRADES_PER_DAY > 1 ? "s" : ""}/day</i>`,
+    `<i>Premium ₹${VWAP930_MIN_PREMIUM}–₹${VWAP930_MAX_PREMIUM} · VWAP touch/above · SL −${VWAP930_SL_PCT}% · Target +${VWAP930_TARGET_PCT}% · Entry @ ${checkpointsStr()} · re-entry only after ${VWAP930_REENTRY_STATUSES.join(" or ")} · max ${VWAP930_MAX_TRADES_PER_DAY} trade${VWAP930_MAX_TRADES_PER_DAY > 1 ? "s" : ""}/day</i>`,
   );
   await postChunked(lines);
 }

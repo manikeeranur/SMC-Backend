@@ -8,6 +8,7 @@ const {
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM,
   VWAP930_SL_PCT, VWAP930_TARGET_PCT,
   VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY,
+  VWAP930_STAGNANT_HOURS, VWAP930_STAGNANT_MAX_POINTS, VWAP930_REENTRY_STATUSES,
 } = require("../config/constants");
 const { checkPriceTouch } = require("./priceTouchUtil");
 
@@ -157,26 +158,30 @@ async function runVWAP930Scan(expiry) {
   };
 }
 
-// ─── Update P&L for an existing alert (SL / TARGET / 15:20 square-off) ──────
+// ─── Update P&L for an existing alert (SL / TARGET / 15:20 square-off /
+// stagnant timeout) ────────────────────────────────────────────────────────
 function updateAlertPnL(alert, currentLtp) {
   const pnl = +(currentLtp - alert.rr.entry).toFixed(2);
   const pct = +(pnl / alert.rr.entry * 100).toFixed(2);
+  const peakMove = +(Math.max(alert.peakMove ?? 0, currentLtp - alert.rr.entry)).toFixed(2);
   let status = alert.status;
 
   if (alert.status === "ACTIVE") {
     const now = new Date();
     const h = now.getHours(), m = now.getMinutes();
     const touch = checkPriceTouch(alert.rr, currentLtp, "target");
+    const hoursOpen = alert.createdAt ? (now.getTime() - new Date(alert.createdAt).getTime()) / 3_600_000 : 0;
     if      (touch === "SL")                status = "SL";
     else if (touch === "TARGET")            status = "TARGET";
     else if (h === 15 && m >= 20)           status = "TIME_EXIT";
+    else if (hoursOpen >= VWAP930_STAGNANT_HOURS && peakMove < VWAP930_STAGNANT_MAX_POINTS)
+                                             status = "STAGNANT_EXIT";
   }
 
   const exitTime = (status !== "ACTIVE" && alert.status === "ACTIVE")
     ? new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" })
     : alert.exitTime;
 
-  const peakMove = +(Math.max(alert.peakMove ?? 0, currentLtp - alert.rr.entry)).toFixed(2);
   return { ...alert, currentPnL: pnl, pnlPct: pct, status, exitTime, lastLtp: currentLtp, peakMove };
 }
 
@@ -274,6 +279,7 @@ async function runHistoricalVWAP930Scan(date, expiry) {
     const { chosen, dir, spot, ceCand, peCand, entryMark } = picked;
     const entry = chosen.premium;
     const rr = buildRR(entry);
+    const stagnantCutoffMs = entryMark.getTime() + VWAP930_STAGNANT_HOURS * 3_600_000;
 
     const laterCandles = chosen.candles.slice(chosen.entryIdx + 1);
     let status = "ACTIVE", exitPrice = entry, exitTime = null, peakMove = 0;
@@ -284,6 +290,9 @@ async function runHistoricalVWAP930Scan(date, expiry) {
       if (c.low  <= rr.sl)     { status = "SL";        exitPrice = rr.sl;     exitTime = c.date; break; }
       if (c.high >= rr.target) { status = "TARGET";    exitPrice = rr.target; exitTime = c.date; break; }
       if (ch === 15 && cm >= 20) { status = "TIME_EXIT"; exitPrice = c.close; exitTime = c.date; break; }
+      if (new Date(c.date).getTime() >= stagnantCutoffMs && peakMove < VWAP930_STAGNANT_MAX_POINTS) {
+        status = "STAGNANT_EXIT"; exitPrice = c.close; exitTime = c.date; break;
+      }
     }
     if (status === "ACTIVE" && laterCandles.length) {
       exitPrice = laterCandles[laterCandles.length - 1].close;
@@ -325,14 +334,15 @@ async function runHistoricalVWAP930Scan(date, expiry) {
   }
 
   // At most VWAP930_MAX_TRADES_PER_DAY entries: keep going only while the
-  // most recent one was stopped out (SL) — any other outcome, or hitting the
-  // cap, ends the day. Mirrors the live daily-limit gate in vwap930.js.
+  // most recent one exited with a status in VWAP930_REENTRY_STATUSES (SL or
+  // a stagnant timeout) — any other outcome, or hitting the cap, ends the
+  // day. Mirrors the live daily-limit gate in vwap930.js.
   const results = [];
   let picked = await attemptEntry(null);
   while (picked && results.length < VWAP930_MAX_TRADES_PER_DAY) {
     const { result, exitTimeMs } = resolveOutcome(picked);
     results.push(result);
-    if (result.status !== "SL" || results.length >= VWAP930_MAX_TRADES_PER_DAY) break;
+    if (!VWAP930_REENTRY_STATUSES.includes(result.status) || results.length >= VWAP930_MAX_TRADES_PER_DAY) break;
     picked = await attemptEntry(exitTimeMs);
   }
 
