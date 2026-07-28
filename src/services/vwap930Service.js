@@ -11,6 +11,19 @@ const {
 } = require("../config/constants");
 const { checkPriceTouch } = require("./priceTouchUtil");
 
+// "09:30, 09:35, ... or 10:55" — built from VWAP930_ENTRY_HOUR ×
+// VWAP930_ENTRY_MINUTES so this text can never drift from the actual
+// checkpoints.
+function checkpointsStr() {
+  const list = [];
+  for (const h of VWAP930_ENTRY_HOUR) {
+    for (const m of VWAP930_ENTRY_MINUTES) {
+      list.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+    }
+  }
+  return list.join(", ").replace(/, ([^,]*)$/, " or $1");
+}
+
 const NIFTY_TOKEN = 256265; // NSE:NIFTY 50 index
 
 // ─── Build R:R (SL −8% / Target +30%) ────────────────────────────────────────
@@ -85,18 +98,18 @@ function decideDirection(ce, pe, vwapCE, vwapPE) {
 }
 
 // ─── Main scan — must fire at one of the fixed entry checkpoints ─────────────
-// (see VWAP930_ENTRY_MINUTES in config/constants.js — the single source of
-// truth for entry timing everywhere; each checkpoint is a further try if
-// the earlier ones found nothing. Not a continuous window.)
+// (see VWAP930_ENTRY_HOUR / VWAP930_ENTRY_MINUTES in config/constants.js —
+// the single source of truth for entry timing everywhere; each checkpoint
+// is a further try if the earlier ones found nothing. Not a continuous
+// window.)
 async function runVWAP930Scan(expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
   const now = new Date();
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes();
-  if (h !== VWAP930_ENTRY_HOUR || !VWAP930_ENTRY_MINUTES.includes(m)) {
-    const checkpoints = VWAP930_ENTRY_MINUTES.map(mm => `${String(VWAP930_ENTRY_HOUR).padStart(2,"0")}:${String(mm).padStart(2,"0")}`).join(" or ");
-    return { signal: false, reason: `Entry checkpoints are ${checkpoints} IST (now ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")})` };
+  if (!VWAP930_ENTRY_HOUR.includes(h) || !VWAP930_ENTRY_MINUTES.includes(m)) {
+    return { signal: false, reason: `Entry checkpoints are ${checkpointsStr()} IST (now ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")})` };
   }
 
   const { ce, pe, spot } = await findCandidateLegs(expiry);
@@ -168,7 +181,7 @@ function updateAlertPnL(alert, currentLtp) {
 }
 
 // ─── Historical / Backtest scan — up to VWAP930_MAX_TRADES_PER_DAY trades ───
-// Tries each fixed checkpoint in VWAP930_ENTRY_MINUTES in order, mirroring
+// Tries each fixed checkpoint (VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES) in order, mirroring
 // the live retry — each checkpoint recomputes its own ATM fresh (spot can
 // drift between checkpoints), same as findCandidateLegs does live. Takes
 // the first checkpoint where a CE or PE qualifies; if that trade is
@@ -195,8 +208,8 @@ async function runHistoricalVWAP930Scan(date, expiry) {
 
   const offsets = [0, -50, 50, -100, 100, -150, 150];
 
-  // Evaluate a single checkpoint from VWAP930_ENTRY_MINUTES — mirrors live's
-  // runVWAP930Scan for that one minute. Returns the chosen leg/direction, or
+  // Evaluate a single checkpoint from VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES — mirrors
+  // live's runVWAP930Scan for that one minute. Returns the chosen leg/direction, or
   // null if neither CE nor PE qualifies at this checkpoint.
   async function tryCheckpoint(entryMark) {
     const entryNiftyCandle = rawNifty.find(c => new Date(c.date).getTime() >= entryMark.getTime());
@@ -243,11 +256,13 @@ async function runHistoricalVWAP930Scan(date, expiry) {
   // Find the first checkpoint (strictly after `afterMs`, if given) where a
   // CE or PE actually qualifies.
   async function attemptEntry(afterMs) {
-    for (const min of VWAP930_ENTRY_MINUTES) {
-      const entryMark = new Date(date); entryMark.setHours(VWAP930_ENTRY_HOUR, min, 0, 0);
-      if (afterMs != null && entryMark.getTime() <= afterMs) continue;
-      const picked = await tryCheckpoint(entryMark);
-      if (picked) return picked;
+    for (const h of VWAP930_ENTRY_HOUR) {
+      for (const m of VWAP930_ENTRY_MINUTES) {
+        const entryMark = new Date(date); entryMark.setHours(h, m, 0, 0);
+        if (afterMs != null && entryMark.getTime() <= afterMs) continue;
+        const picked = await tryCheckpoint(entryMark);
+        if (picked) return picked;
+      }
     }
     return null;
   }
@@ -322,10 +337,9 @@ async function runHistoricalVWAP930Scan(date, expiry) {
   }
 
   if (!results.length) {
-    const checkpoints = VWAP930_ENTRY_MINUTES.map(mm => `${String(VWAP930_ENTRY_HOUR).padStart(2,"0")}:${String(mm).padStart(2,"0")}`).join(" or ");
     return {
       results: [], date, expiry, totalSignals: 0, wins: 0, losses: 0, winRate: null,
-      message: `No CE/PE in premium band touching/above VWAP at ${checkpoints}`,
+      message: `No CE/PE in premium band touching/above VWAP at ${checkpointsStr()}`,
     };
   }
 

@@ -83,9 +83,10 @@ async function refreshActivePnL(expiry) {
   } catch { /* ignore — keep stale data */ }
 }
 
-// ─── Core scan + alert creation — called at each fixed entry checkpoint in
-// VWAP930_ENTRY_MINUTES (cron wiring is in index.js); the open-position/
-// daily-limit gates below control how many checkpoints actually enter ─────
+// ─── Core scan + alert creation — called at each fixed entry checkpoint
+// (VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES, cron wiring is in index.js);
+// the open-position/daily-limit gates below control how many checkpoints
+// actually enter ───────────────────────────────────────────────────────────
 async function doScan(expiry) {
   if (scanRunning) return;
   if (!isAuthenticated()) return;
@@ -152,7 +153,7 @@ router.get("/status", (req, res) => {
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes(), day = ist.getDay();
   const marketOpen = day >= 1 && day <= 5 && (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m <= 30));
-  const scanActive = marketOpen && h === VWAP930_ENTRY_HOUR && VWAP930_ENTRY_MINUTES.includes(m);
+  const scanActive = marketOpen && VWAP930_ENTRY_HOUR.includes(h) && VWAP930_ENTRY_MINUTES.includes(m);
   const today = todayIST();
   const tradedToday = alerts.some(a => {
     const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
@@ -231,7 +232,7 @@ router.get("/alerts", async (req, res) => {
   });
 });
 
-// POST /api/vwap930/scan  (manual trigger — still gated to VWAP930_ENTRY_MINUTES internally)
+// POST /api/vwap930/scan  (manual trigger — still gated to VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES internally)
 router.post("/scan", async (req, res) => {
   if (!isAuthenticated())
     return res.status(401).json({ error: "Not authenticated" });

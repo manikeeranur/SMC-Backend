@@ -125,12 +125,22 @@ schedule.scheduleJob({ rule: "* 9-15 * * 1-5", tz: "Asia/Kolkata" }, async () =>
   }
 });
 
-// ─── VWAP 9:30 Scanner — fires at each checkpoint in VWAP930_ENTRY_MINUTES,
-// Mon–Fri IST, stopping at whichever one first finds a qualifying entry
-// (fixed checkpoints, not a continuous window). The cron rule is built from
-// that same constant, so it can never drift out of sync again. ─────────────
-schedule.scheduleJob({ rule: `${VWAP930_ENTRY_MINUTES.join(",")} ${VWAP930_ENTRY_HOUR} * * 1-5`, tz: "Asia/Kolkata" }, async () => {
+// ─── VWAP 9:30 Scanner — fires every minute across the hours in
+// VWAP930_ENTRY_HOUR, Mon–Fri IST, but only actually scans when both the
+// hour is in VWAP930_ENTRY_HOUR and the minute is in VWAP930_ENTRY_MINUTES
+// (same broad-range-then-filter pattern the SMC scanner uses — a cron
+// minute-list alone can't encode a two-array cross product). Stops at
+// whichever checkpoint first finds a qualifying entry. ─────────────────────
+const VWAP930_CRON_RANGE = VWAP930_ENTRY_HOUR.length > 1
+  ? `${Math.min(...VWAP930_ENTRY_HOUR)}-${Math.max(...VWAP930_ENTRY_HOUR)}`
+  : String(VWAP930_ENTRY_HOUR[0]);
+schedule.scheduleJob({ rule: `* ${VWAP930_CRON_RANGE} * * 1-5`, tz: "Asia/Kolkata" }, async () => {
   if (!isAuthenticated()) return;
+
+  const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours(), m = ist.getMinutes();
+  if (!VWAP930_ENTRY_HOUR.includes(h) || !VWAP930_ENTRY_MINUTES.includes(m)) return;
+
   try {
     const { getLiveExpiries } = require("./src/services/kiteService");
     const expiries = await getLiveExpiries().catch(() => []);

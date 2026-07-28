@@ -40,9 +40,11 @@ const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 300; // 1
 const VWAP930_SL_PCT      = 8;   // stop loss  −8%
 const VWAP930_TARGET_PCT  = 30;  // target     +30%
 const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
-const VWAP930_ENTRY_HOUR  = 9;
-// Fixed checkpoints, checked in order — each a further try if the earlier
-// ones found no qualifying CE/PE. Not a continuous window.
+// Fixed entry checkpoints = every hour below × every minute below (e.g.
+// [9,10] × [30,35,40,45,50,55] = 9:30, 9:35, ..., 9:55, 10:30, ..., 10:55).
+// Checked in order, each a further try if the earlier ones found no
+// qualifying CE/PE. Not a continuous window.
+const VWAP930_ENTRY_HOUR    = [9, 10, 11, 12, 13, 14, 15];
 const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
 // At most this many entries per day: the 1st at whichever checkpoint first
 // qualifies, and — only if that one gets stopped out (SL) before the
@@ -50,7 +52,7 @@ const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
 // other exit reason (TARGET/EOD/TIME_EXIT), or reaching this cap, ends the
 // day with no further entries. Shared by both live (vwap930.js) and
 // backtest (vwap930Service.js) so they can never drift apart.
-const VWAP930_MAX_TRADES_PER_DAY = 2;
+const VWAP930_MAX_TRADES_PER_DAY = 3;
 
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,

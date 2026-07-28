@@ -11,13 +11,17 @@ const {
 } = require("../config/constants");
 const ORDER_QTY = LOT_SIZE * VWAP930_NUM_LOTS;
 
-// "09:30, 09:35 or 09:40 ..." — built from VWAP930_ENTRY_MINUTES so this
-// text can never drift from the actual checkpoints.
+// "09:30, 09:35, ... or 10:55" — built from VWAP930_ENTRY_HOUR ×
+// VWAP930_ENTRY_MINUTES so this text can never drift from the actual
+// checkpoints.
 function checkpointsStr() {
-  return VWAP930_ENTRY_MINUTES
-    .map(m => `${String(VWAP930_ENTRY_HOUR).padStart(2, "0")}:${String(m).padStart(2, "0")}`)
-    .join(", ")
-    .replace(/, ([^,]*)$/, " or $1");
+  const list = [];
+  for (const h of VWAP930_ENTRY_HOUR) {
+    for (const m of VWAP930_ENTRY_MINUTES) {
+      list.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+    }
+  }
+  return list.join(", ").replace(/, ([^,]*)$/, " or $1");
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
