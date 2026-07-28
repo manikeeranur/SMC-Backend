@@ -6,7 +6,7 @@ const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL } = require("..
 const { buildOptionChain }           = require("../services/optionChainService");
 const { sendVwap930Alert, sendVwap930Result, sendVwap930BacktestResults } = require("../services/vwap930Telegram");
 const { isAuthenticated }            = require("../config/kite");
-const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES } = require("../config/constants");
+const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY } = require("../config/constants");
 const autoTrade                      = require("./vwap930AutoTrade");
 const { saveVwap930Alert, saveVwap930Backtest } = require("../services/dbSyncService");
 const Vwap930Alert         = require("../models/Vwap930Alert");
@@ -19,7 +19,7 @@ let lastScanAt     = null; // ISO string of last scan time
 let scanRunning    = false;
 let lastMongoSync  = 0;
 const MAX_ALERTS         = 50;
-const MAX_TRADES_PER_DAY = 1;  // only one entry per day, by design
+const MAX_TRADES_PER_DAY = VWAP930_MAX_TRADES_PER_DAY;
 
 // instrument token → alertId, for O(1) tick-driven SL/Target lookup. Populated
 // when an alert is created (and on Mongo-restore), removed once it exits.
@@ -83,9 +83,9 @@ async function refreshActivePnL(expiry) {
   } catch { /* ignore — keep stale data */ }
 }
 
-// ─── Core scan + alert creation — called at each fixed entry checkpoint,
-// 09:30, 09:40, and 09:50 (see index.js); the open-position/daily-limit
-// gates below ensure only the first successful checkpoint actually enters ──
+// ─── Core scan + alert creation — called at each fixed entry checkpoint in
+// VWAP930_ENTRY_MINUTES (cron wiring is in index.js); the open-position/
+// daily-limit gates below control how many checkpoints actually enter ─────
 async function doScan(expiry) {
   if (scanRunning) return;
   if (!isAuthenticated()) return;
@@ -103,14 +103,20 @@ async function doScan(expiry) {
       return;
     }
 
-    // Gate: only one entry per calendar day (IST)
+    // Gate: at most MAX_TRADES_PER_DAY entries per calendar day (IST) — and
+    // a 2nd is only allowed if the 1st was stopped out (SL), never for any
+    // other exit reason.
     const today = todayIST();
-    const todayCount = alerts.filter(a => {
+    const todaysAlerts = alerts.filter(a => {
       const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
       return d === today;
-    }).length;
-    if (todayCount >= MAX_TRADES_PER_DAY) {
+    });
+    if (todaysAlerts.length >= MAX_TRADES_PER_DAY) {
       console.log(`[VWAP930] Daily limit (${MAX_TRADES_PER_DAY}) reached — no new entries`);
+      return;
+    }
+    if (todaysAlerts.length === 1 && todaysAlerts[0].status !== "SL") {
+      console.log(`[VWAP930] First entry today exited ${todaysAlerts[0].status} (not SL) — no re-entry`);
       return;
     }
 
@@ -225,7 +231,7 @@ router.get("/alerts", async (req, res) => {
   });
 });
 
-// POST /api/vwap930/scan  (manual trigger — still gated to the 09:26–09:45 IST entry window internally)
+// POST /api/vwap930/scan  (manual trigger — still gated to VWAP930_ENTRY_MINUTES internally)
 router.post("/scan", async (req, res) => {
   if (!isAuthenticated())
     return res.status(401).json({ error: "Not authenticated" });

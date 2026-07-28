@@ -30,22 +30,31 @@ const FALLBACK2_MAX = Math.round(MAX_PREMIUM * 2.00);
 const SWEET_SPOT    = Math.round((MIN_PREMIUM + MAX_PREMIUM) / 2);
 
 // ─── VWAP 9:30 Strategy ─────────────────────────────────────────────────────────
-// Exact 09:30 IST entry only · CE/PE whose premium is ₹130–₹150 AND price is
-// touching/above its own VWAP · single entry per day · Target +30% / SL −8%
+// Entry checkpoints, premium band, SL/Target, and daily trade cap are ALL
+// defined below — this is the single source of truth for VWAP930 timing and
+// premium filtering. Every other file (live scan, backtest, cron, Telegram
+// messages, status display) must read these constants, never hardcode its
+// own copy of a time or a premium number.
 const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 200; // 130;
 const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 300; // 150
 const VWAP930_SL_PCT      = 8;   // stop loss  −8%
 const VWAP930_TARGET_PCT  = 30;  // target     +30%
 const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
 const VWAP930_ENTRY_HOUR  = 9;
-// Two fixed checkpoints, checked in order — if 09:30 finds no qualifying
-// CE/PE, 09:45 gets one more try. Not a continuous window; still at most
-// one entry per day (see the daily-limit/open-position gates in vwap930.js).
+// Fixed checkpoints, checked in order — each a further try if the earlier
+// ones found no qualifying CE/PE. Not a continuous window.
 const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
+// At most this many entries per day: the 1st at whichever checkpoint first
+// qualifies, and — only if that one gets stopped out (SL) before the
+// checkpoints run out — one re-entry at the next qualifying checkpoint. Any
+// other exit reason (TARGET/EOD/TIME_EXIT), or reaching this cap, ends the
+// day with no further entries. Shared by both live (vwap930.js) and
+// backtest (vwap930Service.js) so they can never drift apart.
+const VWAP930_MAX_TRADES_PER_DAY = 2;
 
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,
   MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT,
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM, VWAP930_SL_PCT, VWAP930_TARGET_PCT,
-  VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES,
+  VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY,
 };

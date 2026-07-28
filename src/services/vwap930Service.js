@@ -7,7 +7,7 @@ const { latestVWAP, calcVWAP }        = require("../utils/vwap");
 const {
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM,
   VWAP930_SL_PCT, VWAP930_TARGET_PCT,
-  VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES,
+  VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY,
 } = require("../config/constants");
 const { checkPriceTouch } = require("./priceTouchUtil");
 
@@ -25,7 +25,8 @@ function buildRR(entry) {
   };
 }
 
-// ─── Find the CE / PE candidate legs whose premium is ₹130–₹150 ─────────────
+// ─── Find the CE / PE candidate legs whose premium is in the
+// VWAP930_MIN_PREMIUM–VWAP930_MAX_PREMIUM band ────────────────────────────
 // Among multiple strikes in-band on the same side, pick the one closest to ATM.
 async function findCandidateLegs(expiry) {
   const chain = await buildOptionChain(expiry, 15);
@@ -84,8 +85,9 @@ function decideDirection(ce, pe, vwapCE, vwapPE) {
 }
 
 // ─── Main scan — must fire at one of the fixed entry checkpoints ─────────────
-// (09:30, 09:40, 09:50 — each a further try if the earlier ones found
-// nothing — see VWAP930_ENTRY_MINUTES; not a continuous window).
+// (see VWAP930_ENTRY_MINUTES in config/constants.js — the single source of
+// truth for entry timing everywhere; each checkpoint is a further try if
+// the earlier ones found nothing. Not a continuous window.)
 async function runVWAP930Scan(expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
@@ -112,7 +114,7 @@ async function runVWAP930Scan(expiry) {
   if (!decision) {
     return {
       signal: false,
-      reason: "Neither CE nor PE touching/above its VWAP at 09:30",
+      reason: `Neither CE nor PE touching/above its VWAP at ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`,
       spot,
       debug: { ce: ce ? { strike: ce.strike, ltp: ce.ltp, vwap: vwapCE } : null,
                pe: pe ? { strike: pe.strike, ltp: pe.ltp, vwap: vwapPE } : null },
@@ -165,12 +167,14 @@ function updateAlertPnL(alert, currentLtp) {
   return { ...alert, currentPnL: pnl, pnlPct: pct, status, exitTime, lastLtp: currentLtp, peakMove };
 }
 
-// ─── Historical / Backtest scan — single day, at most one trade ─────────────
-// Tries each fixed checkpoint in VWAP930_ENTRY_MINUTES in order (09:30,
-// 09:40, 09:50), mirroring the live retry — each checkpoint recomputes its
-// own ATM fresh (spot can drift between checkpoints), same as
-// findCandidateLegs does live. Stops at the first checkpoint where a CE or
-// PE actually qualifies.
+// ─── Historical / Backtest scan — up to VWAP930_MAX_TRADES_PER_DAY trades ───
+// Tries each fixed checkpoint in VWAP930_ENTRY_MINUTES in order, mirroring
+// the live retry — each checkpoint recomputes its own ATM fresh (spot can
+// drift between checkpoints), same as findCandidateLegs does live. Takes
+// the first checkpoint where a CE or PE qualifies; if that trade is
+// SL-stopped and the cap isn't reached, tries the next checkpoint after the
+// SL for one more entry — same re-entry-only-after-SL rule as doScan() in
+// vwap930.js.
 async function runHistoricalVWAP930Scan(date, expiry) {
   if (!isAuthenticated()) throw new Error("Not authenticated");
 
@@ -191,7 +195,7 @@ async function runHistoricalVWAP930Scan(date, expiry) {
 
   const offsets = [0, -50, 50, -100, 100, -150, 150];
 
-  // Evaluate a single checkpoint (e.g. 09:30) — mirrors live's
+  // Evaluate a single checkpoint from VWAP930_ENTRY_MINUTES — mirrors live's
   // runVWAP930Scan for that one minute. Returns the chosen leg/direction, or
   // null if neither CE nor PE qualifies at this checkpoint.
   async function tryCheckpoint(entryMark) {
@@ -236,14 +240,88 @@ async function runHistoricalVWAP930Scan(date, expiry) {
     return { chosen, dir, spot, ceCand, peCand, entryMark };
   }
 
-  let picked = null;
-  for (const min of VWAP930_ENTRY_MINUTES) {
-    const entryMark = new Date(date); entryMark.setHours(VWAP930_ENTRY_HOUR, min, 0, 0);
-    picked = await tryCheckpoint(entryMark);
-    if (picked) break;
+  // Find the first checkpoint (strictly after `afterMs`, if given) where a
+  // CE or PE actually qualifies.
+  async function attemptEntry(afterMs) {
+    for (const min of VWAP930_ENTRY_MINUTES) {
+      const entryMark = new Date(date); entryMark.setHours(VWAP930_ENTRY_HOUR, min, 0, 0);
+      if (afterMs != null && entryMark.getTime() <= afterMs) continue;
+      const picked = await tryCheckpoint(entryMark);
+      if (picked) return picked;
+    }
+    return null;
   }
 
-  if (!picked) {
+  // Resolve one picked checkpoint's full trade outcome (SL / Target / EOD /
+  // time-exit) by walking its candles forward — mirrors the live per-trade
+  // SL/Target monitor.
+  function resolveOutcome(picked) {
+    const { chosen, dir, spot, ceCand, peCand, entryMark } = picked;
+    const entry = chosen.premium;
+    const rr = buildRR(entry);
+
+    const laterCandles = chosen.candles.slice(chosen.entryIdx + 1);
+    let status = "ACTIVE", exitPrice = entry, exitTime = null, peakMove = 0;
+    for (const c of laterCandles) {
+      const { h: ch, m: cm } = toIST(c.date);
+      const move = +(c.high - entry).toFixed(2);
+      if (move > peakMove) peakMove = move;
+      if (c.low  <= rr.sl)     { status = "SL";        exitPrice = rr.sl;     exitTime = c.date; break; }
+      if (c.high >= rr.target) { status = "TARGET";    exitPrice = rr.target; exitTime = c.date; break; }
+      if (ch === 15 && cm >= 20) { status = "TIME_EXIT"; exitPrice = c.close; exitTime = c.date; break; }
+    }
+    if (status === "ACTIVE" && laterCandles.length) {
+      exitPrice = laterCandles[laterCandles.length - 1].close;
+      status    = "EOD";
+      exitTime  = laterCandles[laterCandles.length - 1].date;
+    }
+
+    const pnl = +(exitPrice - entry).toFixed(2);
+    const pct = +(pnl / entry * 100).toFixed(2);
+    const entryTimeStr = `${String(entryMark.getHours()).padStart(2,"0")}:${String(entryMark.getMinutes()).padStart(2,"0")}`;
+    const exitTimeStr = exitTime
+      ? new Date(exitTime).toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
+      : null;
+
+    return {
+      result: {
+        id:         `hist_VWAP930_${dir}_${chosen.strike}_${date}_${entryTimeStr.replace(":", "")}`,
+        entryTime:  entryTimeStr,
+        exitTime:   exitTimeStr,
+        direction:  dir,
+        strike:     chosen.strike,
+        leg:        { token: chosen.token, strike: chosen.strike, type: dir, ltp: exitPrice },
+        rr,
+        vwap:       chosen.vwap,
+        vwapCE:     ceCand?.vwap ?? null,
+        vwapPE:     peCand?.vwap ?? null,
+        status,
+        currentPnL: pnl,
+        pnlPct:     pct,
+        peakMove,
+        spot,
+        expiry,
+        createdAt:  chosen.entryCandle.date,
+        isHistorical: true,
+        date,
+      },
+      exitTimeMs: exitTime ? new Date(exitTime).getTime() : entryMark.getTime(),
+    };
+  }
+
+  // At most VWAP930_MAX_TRADES_PER_DAY entries: keep going only while the
+  // most recent one was stopped out (SL) — any other outcome, or hitting the
+  // cap, ends the day. Mirrors the live daily-limit gate in vwap930.js.
+  const results = [];
+  let picked = await attemptEntry(null);
+  while (picked && results.length < VWAP930_MAX_TRADES_PER_DAY) {
+    const { result, exitTimeMs } = resolveOutcome(picked);
+    results.push(result);
+    if (result.status !== "SL" || results.length >= VWAP930_MAX_TRADES_PER_DAY) break;
+    picked = await attemptEntry(exitTimeMs);
+  }
+
+  if (!results.length) {
     const checkpoints = VWAP930_ENTRY_MINUTES.map(mm => `${String(VWAP930_ENTRY_HOUR).padStart(2,"0")}:${String(mm).padStart(2,"0")}`).join(" or ");
     return {
       results: [], date, expiry, totalSignals: 0, wins: 0, losses: 0, winRate: null,
@@ -251,66 +329,17 @@ async function runHistoricalVWAP930Scan(date, expiry) {
     };
   }
 
-  const { chosen, dir, spot, ceCand, peCand } = picked;
-  const entry = chosen.premium;
-  const rr = buildRR(entry);
-
-  // 3. Walk forward from the entry candle to resolve SL / Target / EOD square-off (15:20)
-  const laterCandles = chosen.candles.slice(chosen.entryIdx + 1);
-  let status = "ACTIVE", exitPrice = entry, exitTime = null, peakMove = 0;
-  for (const c of laterCandles) {
-    const { h: ch, m: cm } = toIST(c.date);
-    const move = +(c.high - entry).toFixed(2);
-    if (move > peakMove) peakMove = move;
-    if (c.low  <= rr.sl)     { status = "SL";        exitPrice = rr.sl;     exitTime = c.date; break; }
-    if (c.high >= rr.target) { status = "TARGET";    exitPrice = rr.target; exitTime = c.date; break; }
-    if (ch === 15 && cm >= 20) { status = "TIME_EXIT"; exitPrice = c.close; exitTime = c.date; break; }
-  }
-  if (status === "ACTIVE" && laterCandles.length) {
-    exitPrice = laterCandles[laterCandles.length - 1].close;
-    status    = "EOD";
-    exitTime  = laterCandles[laterCandles.length - 1].date;
-  }
-
-  const pnl = +(exitPrice - entry).toFixed(2);
-  const pct = +(pnl / entry * 100).toFixed(2);
-  const entryTimeStr = `${String(picked.entryMark.getHours()).padStart(2,"0")}:${String(picked.entryMark.getMinutes()).padStart(2,"0")}`;
-  const exitTimeStr = exitTime
-    ? new Date(exitTime).toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
-    : null;
-
-  const result = {
-    id:         `hist_VWAP930_${dir}_${chosen.strike}_${date}`,
-    entryTime:  entryTimeStr,
-    exitTime:   exitTimeStr,
-    direction:  dir,
-    strike:     chosen.strike,
-    leg:        { token: chosen.token, strike: chosen.strike, type: dir, ltp: exitPrice },
-    rr,
-    vwap:       chosen.vwap,
-    vwapCE:     ceCand?.vwap ?? null,
-    vwapPE:     peCand?.vwap ?? null,
-    status,
-    currentPnL: pnl,
-    pnlPct:     pct,
-    peakMove,
-    spot,
-    expiry,
-    createdAt:  chosen.entryCandle.date,
-    isHistorical: true,
-    date,
-  };
-
-  const wins   = status === "TARGET" ? 1 : 0;
-  const losses = status === "SL" ? 1 : 0;
-  const closed = status !== "ACTIVE" ? 1 : 0;
+  const wins   = results.filter(r => r.status === "TARGET").length;
+  const losses = results.filter(r => r.status === "SL").length;
+  const eod    = results.filter(r => r.status === "EOD").length;
+  const closed = results.filter(r => r.status !== "ACTIVE").length;
 
   return {
-    results: [result],
+    results,
     date, expiry,
-    totalSignals: 1,
+    totalSignals: results.length,
     wins, losses,
-    eod: status === "EOD" ? 1 : 0,
+    eod,
     winRate: closed > 0 ? +((wins / closed) * 100).toFixed(1) : null,
   };
 }
