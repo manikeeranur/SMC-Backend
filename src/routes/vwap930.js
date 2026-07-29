@@ -33,6 +33,20 @@ function todayIST() {
   return new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
+// "HH:MM" → is this a currently-valid VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES
+// checkpoint? Guards the Mongo restore-sync below against stale documents
+// (written under an older/different checkpoint grid, or bad test data)
+// leaking into today's live alert list with an entryTime that current rules
+// could never actually produce.
+const VALID_ENTRY_TIMES = new Set(
+  VWAP930_ENTRY_HOUR.flatMap(h => VWAP930_ENTRY_MINUTES.map(m =>
+    `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+  ))
+);
+function isValidEntryTime(entryTime) {
+  return typeof entryTime === "string" && VALID_ENTRY_TIMES.has(entryTime);
+}
+
 // ─── Apply a new LTP to one alert — the single place that decides ACTIVE→exit.
 // Called from both the cron/poll path (`source: "cron"`) and the tick monitor
 // (`source: "tick"`). Mutates `alerts[idx]` synchronously and, if this call is
@@ -192,7 +206,12 @@ router.get("/alerts", async (req, res) => {
       const docs = await Vwap930Alert.find({ date: today }).sort({ createdAt: 1 }).lean();
       if (docs.length) {
         const inMemoryIds = new Set(alerts.map(a => a.id || a.alertId));
-        const missing = docs.filter(d => !inMemoryIds.has(d.alertId));
+        const notInMemory = docs.filter(d => !inMemoryIds.has(d.alertId));
+        const missing = notInMemory.filter(d => isValidEntryTime(d.entryTime));
+        const stale = notInMemory.length - missing.length;
+        if (stale > 0) {
+          console.warn(`[VWAP930] Skipped ${stale} stale alert(s) from MongoDB with an entryTime outside the current checkpoint grid`);
+        }
         if (missing.length) {
           const restored = missing.map(d => ({
             id: d.alertId, alertId: d.alertId,

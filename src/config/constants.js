@@ -35,8 +35,8 @@ const SWEET_SPOT    = Math.round((MIN_PREMIUM + MAX_PREMIUM) / 2);
 // premium filtering. Every other file (live scan, backtest, cron, Telegram
 // messages, status display) must read these constants, never hardcode its
 // own copy of a time or a premium number.
-const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 200; // 130;
-const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 300; // 150
+const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 100; // 130;
+const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 150; // 150
 const VWAP930_SL_PCT      = 8;   // stop loss  −8%
 const VWAP930_TARGET_PCT  = 30;  // target     +30%
 const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
@@ -53,7 +53,7 @@ const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
 // TIME_EXIT), or reaching this cap, ends the day with no further entries.
 // Shared by both live (vwap930.js) and backtest (vwap930Service.js) so they
 // can never drift apart.
-const VWAP930_MAX_TRADES_PER_DAY = 3;
+const VWAP930_MAX_TRADES_PER_DAY = 10;
 // Force-exit a still-open position once it's been open this many hours AND
 // its peak favorable move (peakMove) has never reached this many points —
 // i.e. the trade has gone nowhere, so cut it loose instead of waiting for
