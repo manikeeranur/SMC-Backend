@@ -441,9 +441,9 @@ async function runHistoricalVWAP930Scan(date, expiry) {
   }
 
   // At most VWAP930_MAX_TRADES_PER_DAY entries: keep going only while the
-  // most recent one exited with a status in VWAP930_REENTRY_STATUSES (SL or
-  // a stagnant timeout) — any other outcome, or hitting the cap, ends the
-  // day. Mirrors the live daily-limit gate in vwap930.js.
+  // most recent one exited with a status in VWAP930_REENTRY_STATUSES — any
+  // other outcome (EOD/TIME_EXIT), or hitting the cap, ends the day. Mirrors
+  // the live daily-limit gate in vwap930.js.
   const results = [];
   let picked = await attemptEntry(null);
   while (picked && results.length < VWAP930_MAX_TRADES_PER_DAY) {

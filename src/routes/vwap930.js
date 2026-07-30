@@ -120,8 +120,8 @@ async function doScan(expiry) {
 
     // Gate: at most MAX_TRADES_PER_DAY entries per calendar day (IST) — and
     // a re-entry is only allowed if the most recent one exited with a
-    // status in VWAP930_REENTRY_STATUSES (SL or a stagnant timeout), never
-    // for any other exit reason.
+    // status in VWAP930_REENTRY_STATUSES, never for any other exit reason
+    // (currently: SL, STAGNANT_EXIT, VWAP_EXIT, TARGET — see constants.js).
     const today = todayIST();
     const todaysAlerts = alerts.filter(a => {
       const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });

@@ -69,10 +69,11 @@ const VWAP930_MAX_TRADES_PER_DAY = 10;
 const VWAP930_STAGNANT_HOURS      = 2;
 const VWAP930_STAGNANT_MAX_POINTS = 20;
 // Exit statuses that are allowed to trigger a re-entry (up to
-// VWAP930_MAX_TRADES_PER_DAY) — a clean SL, a stagnant timeout, or an early
-// VWAP-close exit all mean "that setup didn't work, try again"; TARGET/EOD/
-// TIME_EXIT do not.
-const VWAP930_REENTRY_STATUSES = ["SL", "STAGNANT_EXIT", "VWAP_EXIT"];
+// VWAP930_MAX_TRADES_PER_DAY) — a clean SL, a stagnant timeout, an early
+// VWAP-close exit, or a TARGET hit all allow trying again for another
+// setup the same day; EOD/TIME_EXIT (forced end-of-day/3:20pm square-off)
+// do not, since the trading day is effectively over by then.
+const VWAP930_REENTRY_STATUSES = ["SL", "STAGNANT_EXIT", "VWAP_EXIT", "TARGET"];
 
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,
