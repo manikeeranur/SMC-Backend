@@ -24,7 +24,7 @@ const { isAuthenticated, onAccessTokenSet } = require("./src/config/kite");
 const { connectDB }       = require("./src/config/db");
 const { syncAlerts, syncVwap930Alerts } = require("./src/services/dbSyncService");
 const settingsService    = require("./src/services/settingsService");
-const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES } = require("./src/config/constants");
+const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_START_HOUR, VWAP930_ENTRY_START_MINUTE } = require("./src/config/constants");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -126,11 +126,11 @@ schedule.scheduleJob({ rule: "* 9-15 * * 1-5", tz: "Asia/Kolkata" }, async () =>
 });
 
 // ─── VWAP 9:30 Scanner — fires every minute across the hours in
-// VWAP930_ENTRY_HOUR, Mon–Fri IST, but only actually scans when both the
-// hour is in VWAP930_ENTRY_HOUR and the minute is in VWAP930_ENTRY_MINUTES
-// (same broad-range-then-filter pattern the SMC scanner uses — a cron
-// minute-list alone can't encode a two-array cross product). Stops at
-// whichever checkpoint first finds a qualifying entry. ─────────────────────
+// VWAP930_ENTRY_HOUR, Mon–Fri IST — continuous, no fixed checkpoint grid.
+// Never scans before VWAP930_ENTRY_START_HOUR:VWAP930_ENTRY_START_MINUTE;
+// doScan() itself only actually takes an entry once a CE/PE's own candle
+// closes above its VWAP, and is gated against re-entering while a position
+// is already open. ───────────────────────────────────────────────────────
 const VWAP930_CRON_RANGE = VWAP930_ENTRY_HOUR.length > 1
   ? `${Math.min(...VWAP930_ENTRY_HOUR)}-${Math.max(...VWAP930_ENTRY_HOUR)}`
   : String(VWAP930_ENTRY_HOUR[0]);
@@ -139,7 +139,7 @@ schedule.scheduleJob({ rule: `* ${VWAP930_CRON_RANGE} * * 1-5`, tz: "Asia/Kolkat
 
   const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes();
-  if (!VWAP930_ENTRY_HOUR.includes(h) || !VWAP930_ENTRY_MINUTES.includes(m)) return;
+  if (h < VWAP930_ENTRY_START_HOUR || (h === VWAP930_ENTRY_START_HOUR && m < VWAP930_ENTRY_START_MINUTE)) return;
 
   try {
     const { getLiveExpiries } = require("./src/services/kiteService");

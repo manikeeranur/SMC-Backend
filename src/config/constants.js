@@ -30,22 +30,29 @@ const FALLBACK2_MAX = Math.round(MAX_PREMIUM * 2.00);
 const SWEET_SPOT    = Math.round((MIN_PREMIUM + MAX_PREMIUM) / 2);
 
 // ─── VWAP 9:30 Strategy ─────────────────────────────────────────────────────────
-// Entry checkpoints, premium band, SL/Target, and daily trade cap are ALL
-// defined below — this is the single source of truth for VWAP930 timing and
-// premium filtering. Every other file (live scan, backtest, cron, Telegram
-// messages, status display) must read these constants, never hardcode its
-// own copy of a time or a premium number.
-const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 100; // 130;
-const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 150; // 150
+// Premium band, SL/Target, and daily trade cap are ALL defined below — this
+// is the single source of truth for VWAP930 timing and premium filtering.
+// Every other file (live scan, backtest, cron, Telegram messages, status
+// display) must read these constants, never hardcode its own copy of a time
+// or a premium number.
+//
+// No fixed entry checkpoints — the live cron (index.js) re-checks every
+// minute across VWAP930_ENTRY_HOUR, but a signal only actually fires once a
+// CE/PE's own VWAP930_CANDLE_MINUTES-minute candle CLOSES strictly above that
+// candle's VWAP, and never before VWAP930_ENTRY_START_HOUR:VWAP930_ENTRY_START_MINUTE
+// IST. SL/Target below are unchanged. The one extra rule: the moment an
+// ACTIVE trade's own VWAP930_CANDLE_MINUTES-minute candle CLOSES below its
+// VWAP, exit immediately — do not wait for SL/Target (see
+// checkVwapCloseExit() in vwap930Service.js).
+const VWAP930_MIN_PREMIUM = Number(process.env.VWAP930_MIN_PREMIUM) || 200; // 130;
+const VWAP930_MAX_PREMIUM = Number(process.env.VWAP930_MAX_PREMIUM) || 300; // 150
 const VWAP930_SL_PCT      = 8;   // stop loss  −8%
-const VWAP930_TARGET_PCT  = 30;  // target     +30%
+const VWAP930_TARGET_PCT  = 8;   // target     +8%
 const VWAP930_NUM_LOTS    = 10;  // 10 lots, single entry per day
-// Fixed entry checkpoints = every hour below × every minute below (e.g.
-// [9,10] × [30,35,40,45,50,55] = 9:30, 9:35, ..., 9:55, 10:30, ..., 10:55).
-// Checked in order, each a further try if the earlier ones found no
-// qualifying CE/PE. Not a continuous window.
-const VWAP930_ENTRY_HOUR    = [9, 10, 11, 12, 13, 14, 15];
-const VWAP930_ENTRY_MINUTES = [30, 35, 40, 45, 50, 55];
+const VWAP930_CANDLE_MINUTES     = 5;  // candle size used for entry confirmation + close-below-VWAP exit
+const VWAP930_ENTRY_HOUR         = [9, 10, 11, 12, 13, 14, 15]; // hours the live cron scans (index.js)
+const VWAP930_ENTRY_START_HOUR   = 9;  // no entries before this hour:minute IST
+const VWAP930_ENTRY_START_MINUTE = 30;
 // At most this many entries per day: the 1st at whichever checkpoint first
 // qualifies, and — only if that one exits with a status in
 // VWAP930_REENTRY_STATUSES before the checkpoints run out — a re-entry at
@@ -62,14 +69,16 @@ const VWAP930_MAX_TRADES_PER_DAY = 10;
 const VWAP930_STAGNANT_HOURS      = 2;
 const VWAP930_STAGNANT_MAX_POINTS = 20;
 // Exit statuses that are allowed to trigger a re-entry (up to
-// VWAP930_MAX_TRADES_PER_DAY) — a clean SL, or a stagnant timeout, both
-// mean "that setup didn't work, try again"; TARGET/EOD/TIME_EXIT do not.
-const VWAP930_REENTRY_STATUSES = ["SL", "STAGNANT_EXIT"];
+// VWAP930_MAX_TRADES_PER_DAY) — a clean SL, a stagnant timeout, or an early
+// VWAP-close exit all mean "that setup didn't work, try again"; TARGET/EOD/
+// TIME_EXIT do not.
+const VWAP930_REENTRY_STATUSES = ["SL", "STAGNANT_EXIT", "VWAP_EXIT"];
 
 module.exports = {
   LOT_SIZE, SENSEX_LOT_SIZE, NUM_LOTS, LOT_SIZES, getLotSize, EXCHANGE, PRODUCT,
   MIN_PREMIUM, MAX_PREMIUM, FALLBACK1_MIN, FALLBACK1_MAX, FALLBACK2_MIN, FALLBACK2_MAX, SWEET_SPOT,
   VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM, VWAP930_SL_PCT, VWAP930_TARGET_PCT,
-  VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY,
+  VWAP930_NUM_LOTS, VWAP930_ENTRY_HOUR, VWAP930_CANDLE_MINUTES,
+  VWAP930_ENTRY_START_HOUR, VWAP930_ENTRY_START_MINUTE, VWAP930_MAX_TRADES_PER_DAY,
   VWAP930_STAGNANT_HOURS, VWAP930_STAGNANT_MAX_POINTS, VWAP930_REENTRY_STATUSES,
 };

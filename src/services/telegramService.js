@@ -68,6 +68,7 @@ function exitReason(status) {
     :    status === "TIME_EXIT"     ? "75 Min / 3:20 PM Exit"
     :    status === "EOD"           ? "End of Day"
     :    status === "STAGNANT_EXIT" ? "Stagnant — No Movement"
+    :    status === "VWAP_EXIT"     ? "Candle Closed Below VWAP"
     :    status;
 }
 

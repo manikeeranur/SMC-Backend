@@ -6,22 +6,17 @@
 const { post, postChunked, exitReason, isConfigured } = require("./telegramService");
 const {
   LOT_SIZE, VWAP930_NUM_LOTS, VWAP930_MIN_PREMIUM, VWAP930_MAX_PREMIUM,
-  VWAP930_SL_PCT, VWAP930_TARGET_PCT, VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES,
+  VWAP930_SL_PCT, VWAP930_TARGET_PCT, VWAP930_CANDLE_MINUTES,
+  VWAP930_ENTRY_START_HOUR, VWAP930_ENTRY_START_MINUTE,
   VWAP930_MAX_TRADES_PER_DAY, VWAP930_REENTRY_STATUSES,
 } = require("../config/constants");
 const ORDER_QTY = LOT_SIZE * VWAP930_NUM_LOTS;
 
-// "09:30, 09:35, ... or 10:55" — built from VWAP930_ENTRY_HOUR ×
-// VWAP930_ENTRY_MINUTES so this text can never drift from the actual
-// checkpoints.
+// "after 09:30" — built from VWAP930_ENTRY_START_HOUR/MINUTE so this text
+// can never drift from the actual gate.
 function checkpointsStr() {
-  const list = [];
-  for (const h of VWAP930_ENTRY_HOUR) {
-    for (const m of VWAP930_ENTRY_MINUTES) {
-      list.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
-    }
-  }
-  return list.join(", ").replace(/, ([^,]*)$/, " or $1");
+  const start = `${String(VWAP930_ENTRY_START_HOUR).padStart(2, "0")}:${String(VWAP930_ENTRY_START_MINUTE).padStart(2, "0")}`;
+  return `any time after ${start} IST`;
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -34,8 +29,8 @@ function sendVwap930Alert(alert) {
     `Entry Time : ${alert.entryTime}`,
     `Entry      : ${alert.rr.entry} RS`,
     `VWAP       : ${alert.vwap} RS`,
-    `SL (−8%)   : ${alert.rr.sl} RS`,
-    `Target(+30%): ${alert.rr.target} RS`,
+    `SL (−${VWAP930_SL_PCT}%)   : ${alert.rr.sl} RS`,
+    `Target(+${VWAP930_TARGET_PCT}%): ${alert.rr.target} RS`,
   ].join("\n");
   post(text);
 }
@@ -59,7 +54,7 @@ async function sendVwap930BacktestResults(data) {
   if (!isConfigured()) return;
   const { results = [], date, expiry, wins = 0, losses = 0, eod = 0, winRate } = data;
   if (!results.length) {
-    await post(`📊 <b>VWAP 9:30 BACKTEST — ${date}</b>\n\nNo qualifying signal at ${checkpointsStr()} for this date.\nExpiry: ${expiry}`);
+    await post(`📊 <b>VWAP 9:30 BACKTEST — ${date}</b>\n\nNo qualifying signal (${checkpointsStr()}) for this date.\nExpiry: ${expiry}`);
     return;
   }
   const lines = [
@@ -84,7 +79,7 @@ async function sendVwap930BacktestResults(data) {
   });
   lines.push(
     ``,
-    `<i>Premium ₹${VWAP930_MIN_PREMIUM}–₹${VWAP930_MAX_PREMIUM} · VWAP touch/above · SL −${VWAP930_SL_PCT}% · Target +${VWAP930_TARGET_PCT}% · Entry @ ${checkpointsStr()} · re-entry only after ${VWAP930_REENTRY_STATUSES.join(" or ")} · max ${VWAP930_MAX_TRADES_PER_DAY} trade${VWAP930_MAX_TRADES_PER_DAY > 1 ? "s" : ""}/day</i>`,
+    `<i>Premium ₹${VWAP930_MIN_PREMIUM}–₹${VWAP930_MAX_PREMIUM} · green strong-bodied ${VWAP930_CANDLE_MINUTES}-min candle close above VWAP · SL −${VWAP930_SL_PCT}% · Target +${VWAP930_TARGET_PCT}% · immediate exit on candle close below VWAP · Entry ${checkpointsStr()} · re-entry only after ${VWAP930_REENTRY_STATUSES.join(" or ")} · max ${VWAP930_MAX_TRADES_PER_DAY} trade${VWAP930_MAX_TRADES_PER_DAY > 1 ? "s" : ""}/day</i>`,
   );
   await postChunked(lines);
 }
@@ -121,7 +116,7 @@ function sendVwap930AutoTradeStarted() {
     `📦 Lot    : ${VWAP930_NUM_LOTS} lot${VWAP930_NUM_LOTS > 1 ? "s" : ""} (${ORDER_QTY} qty)`,
     `⚡ Orders : MARKET entry + SL-M stop loss`,
     ``,
-    `<i>Live VWAP 9:30 signal will place a real Kite order — only at ${checkpointsStr()} IST.</i>`,
+    `<i>Live VWAP 9:30 signal will place a real Kite order — ${checkpointsStr()}.</i>`,
   ].join("\n"));
 }
 

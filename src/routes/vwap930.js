@@ -2,11 +2,11 @@
 
 const express  = require("express");
 const router   = express.Router();
-const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL } = require("../services/vwap930Service");
+const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL, checkVwapCloseExit, isAfterEntryStart } = require("../services/vwap930Service");
 const { buildOptionChain }           = require("../services/optionChainService");
 const { sendVwap930Alert, sendVwap930Result, sendVwap930BacktestResults } = require("../services/vwap930Telegram");
 const { isAuthenticated }            = require("../config/kite");
-const { VWAP930_ENTRY_HOUR, VWAP930_ENTRY_MINUTES, VWAP930_MAX_TRADES_PER_DAY, VWAP930_REENTRY_STATUSES } = require("../config/constants");
+const { VWAP930_ENTRY_START_HOUR, VWAP930_ENTRY_START_MINUTE, VWAP930_MAX_TRADES_PER_DAY, VWAP930_REENTRY_STATUSES } = require("../config/constants");
 const autoTrade                      = require("./vwap930AutoTrade");
 const { saveVwap930Alert, saveVwap930Backtest } = require("../services/dbSyncService");
 const Vwap930Alert         = require("../models/Vwap930Alert");
@@ -33,18 +33,15 @@ function todayIST() {
   return new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-// "HH:MM" → is this a currently-valid VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES
-// checkpoint? Guards the Mongo restore-sync below against stale documents
-// (written under an older/different checkpoint grid, or bad test data)
-// leaking into today's live alert list with an entryTime that current rules
-// could never actually produce.
-const VALID_ENTRY_TIMES = new Set(
-  VWAP930_ENTRY_HOUR.flatMap(h => VWAP930_ENTRY_MINUTES.map(m =>
-    `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
-  ))
-);
+// "HH:MM" → is this at/after the VWAP930_ENTRY_START_HOUR:VWAP930_ENTRY_START_MINUTE
+// gate? Guards the Mongo restore-sync below against stale documents (written
+// under an older rule set, or bad test data) leaking into today's live alert
+// list with an entryTime current rules could never actually produce.
 function isValidEntryTime(entryTime) {
-  return typeof entryTime === "string" && VALID_ENTRY_TIMES.has(entryTime);
+  if (typeof entryTime !== "string") return false;
+  const match = entryTime.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return false;
+  return isAfterEntryStart(Number(match[1]), Number(match[2]));
 }
 
 // ─── Apply a new LTP to one alert — the single place that decides ACTIVE→exit.
@@ -55,11 +52,11 @@ function isValidEntryTime(entryTime) {
 // check and the write), whichever caller gets here first wins — the other
 // path's own `status !== "ACTIVE"` check on its next pass will see the flip
 // and skip, so there is no double-exit race.
-function applyLtpToAlert(idx, ltp, source = "cron") {
+function applyLtpToAlert(idx, ltp, source = "cron", vwapBroken = false) {
   const a = alerts[idx];
   if (!a || a.status !== "ACTIVE") return;
 
-  const updated = updateAlertPnL(a, ltp);
+  const updated = updateAlertPnL(a, ltp, vwapBroken);
   alerts[idx] = { ...updated, leg: { ...a.leg, ltp } };
 
   if (updated.status !== "ACTIVE") {
@@ -80,6 +77,9 @@ function handleTick(token, ltp) {
 }
 
 // ─── Update P&L for all ACTIVE alerts using latest chain data ────────────────
+// Also checks, per active alert, whether its own VWAP930_CANDLE_MINUTES-minute
+// candle has just closed below its VWAP — that wins over SL/Target and exits
+// immediately (see updateAlertPnL in vwap930Service.js).
 async function refreshActivePnL(expiry) {
   const active = alerts.filter(a => a.status === "ACTIVE");
   if (!active.length || !isAuthenticated()) return;
@@ -92,15 +92,15 @@ async function refreshActivePnL(expiry) {
       const row    = chain.rows.find(r => r.strike === a.strike);
       const newLeg = a.direction === "CE" ? row?.ce : row?.pe;
       if (!newLeg) continue;
-      applyLtpToAlert(idx, newLeg.leg?.ltp ?? newLeg.ltp, "cron");
+      const vwapBroken = await checkVwapCloseExit(a);
+      applyLtpToAlert(idx, newLeg.leg?.ltp ?? newLeg.ltp, "cron", vwapBroken);
     }
   } catch { /* ignore — keep stale data */ }
 }
 
-// ─── Core scan + alert creation — called at each fixed entry checkpoint
-// (VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES, cron wiring is in index.js);
-// the open-position/daily-limit gates below control how many checkpoints
-// actually enter ───────────────────────────────────────────────────────────
+// ─── Core scan + alert creation — called every minute once the entry-start
+// gate has passed (cron wiring is in index.js); the open-position/daily-limit
+// gates below control how many of those minute-ticks actually enter ────────
 async function doScan(expiry) {
   if (scanRunning) return;
   if (!isAuthenticated()) return;
@@ -168,7 +168,7 @@ router.get("/status", (req, res) => {
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours(), m = ist.getMinutes(), day = ist.getDay();
   const marketOpen = day >= 1 && day <= 5 && (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m <= 30));
-  const scanActive = marketOpen && VWAP930_ENTRY_HOUR.includes(h) && VWAP930_ENTRY_MINUTES.includes(m);
+  const scanActive = marketOpen && isAfterEntryStart(h, m);
   const today = todayIST();
   const tradedToday = alerts.some(a => {
     const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
@@ -252,7 +252,7 @@ router.get("/alerts", async (req, res) => {
   });
 });
 
-// POST /api/vwap930/scan  (manual trigger — still gated to VWAP930_ENTRY_HOUR × VWAP930_ENTRY_MINUTES internally)
+// POST /api/vwap930/scan  (manual trigger — still gated to the entry-start time internally)
 router.post("/scan", async (req, res) => {
   if (!isAuthenticated())
     return res.status(401).json({ error: "Not authenticated" });
