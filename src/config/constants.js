@@ -60,7 +60,7 @@ const VWAP930_ENTRY_START_MINUTE = 30;
 // TIME_EXIT), or reaching this cap, ends the day with no further entries.
 // Shared by both live (vwap930.js) and backtest (vwap930Service.js) so they
 // can never drift apart.
-const VWAP930_MAX_TRADES_PER_DAY = 50;
+const VWAP930_MAX_TRADES_PER_DAY = 10;
 // Force-exit a still-open position once it's been open this many hours AND
 // its peak favorable move (peakMove) has never reached this many points —
 // i.e. the trade has gone nowhere, so cut it loose instead of waiting for
