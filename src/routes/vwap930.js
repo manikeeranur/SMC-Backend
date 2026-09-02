@@ -2,7 +2,7 @@
 
 const express  = require("express");
 const router   = express.Router();
-const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL, checkVwapCloseExit, isAfterEntryStart } = require("../services/vwap930Service");
+const { runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL, isAfterEntryStart } = require("../services/vwap930Service");
 const { buildOptionChain }           = require("../services/optionChainService");
 const { sendVwap930Alert, sendVwap930Result, sendVwap930BacktestResults } = require("../services/vwap930Telegram");
 const { isAuthenticated }            = require("../config/kite");
@@ -52,11 +52,11 @@ function isValidEntryTime(entryTime) {
 // check and the write), whichever caller gets here first wins — the other
 // path's own `status !== "ACTIVE"` check on its next pass will see the flip
 // and skip, so there is no double-exit race.
-function applyLtpToAlert(idx, ltp, source = "cron", vwapBroken = false) {
+function applyLtpToAlert(idx, ltp, source = "cron") {
   const a = alerts[idx];
   if (!a || a.status !== "ACTIVE") return;
 
-  const updated = updateAlertPnL(a, ltp, vwapBroken);
+  const updated = updateAlertPnL(a, ltp);
   alerts[idx] = { ...updated, leg: { ...a.leg, ltp } };
 
   if (updated.status !== "ACTIVE") {
@@ -77,9 +77,6 @@ function handleTick(token, ltp) {
 }
 
 // ─── Update P&L for all ACTIVE alerts using latest chain data ────────────────
-// Also checks, per active alert, whether its own VWAP930_CANDLE_MINUTES-minute
-// candle has just closed below its VWAP — that wins over SL/Target and exits
-// immediately (see updateAlertPnL in vwap930Service.js).
 async function refreshActivePnL(expiry) {
   const active = alerts.filter(a => a.status === "ACTIVE");
   if (!active.length || !isAuthenticated()) return;
@@ -92,8 +89,7 @@ async function refreshActivePnL(expiry) {
       const row    = chain.rows.find(r => r.strike === a.strike);
       const newLeg = a.direction === "CE" ? row?.ce : row?.pe;
       if (!newLeg) continue;
-      const vwapBroken = await checkVwapCloseExit(a);
-      applyLtpToAlert(idx, newLeg.leg?.ltp ?? newLeg.ltp, "cron", vwapBroken);
+      applyLtpToAlert(idx, newLeg.leg?.ltp ?? newLeg.ltp, "cron");
     }
   } catch { /* ignore — keep stale data */ }
 }
@@ -118,10 +114,11 @@ async function doScan(expiry) {
       return;
     }
 
-    // Gate: at most MAX_TRADES_PER_DAY entries per calendar day (IST) — and
-    // a re-entry is only allowed if the most recent one exited with a
-    // status in VWAP930_REENTRY_STATUSES, never for any other exit reason
-    // (currently: SL, STAGNANT_EXIT, VWAP_EXIT, TARGET — see constants.js).
+    // Gate: at most MAX_TRADES_PER_DAY (2) entries per calendar day (IST) —
+    // and a re-entry is only allowed if the most recent one exited with a
+    // status in VWAP930_REENTRY_STATUSES, i.e. SL or STAGNANT_EXIT (see
+    // constants.js). A TARGET hit ends the day immediately with no further
+    // entries.
     const today = todayIST();
     const todaysAlerts = alerts.filter(a => {
       const d = new Date(a.createdAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
@@ -133,6 +130,20 @@ async function doScan(expiry) {
     }
     if (todaysAlerts.length >= 1 && !VWAP930_REENTRY_STATUSES.includes(todaysAlerts[0].status)) {
       console.log(`[VWAP930] Last entry today exited ${todaysAlerts[0].status} (not re-entry eligible) — no re-entry`);
+      return;
+    }
+    // Gate: even a re-entry-eligible exit (SL/STAGNANT_EXIT) doesn't earn a
+    // 2nd trade if the 1st never moved into profit at all — peakMove 0
+    // means the trade went straight to SL with no favorable move, so the
+    // setup itself was bad, not just unlucky.
+    if (todaysAlerts.length >= 1 && !(todaysAlerts[0].peakMove > 0)) {
+      console.log(`[VWAP930] Last entry today never moved favorably (peakMove ${todaysAlerts[0].peakMove ?? 0}) — no re-entry`);
+      return;
+    }
+    // Gate: a STAGNANT_EXIT that closed in profit is a win, not a loss to
+    // retry from — treat it like TARGET and end the day.
+    if (todaysAlerts.length >= 1 && todaysAlerts[0].status === "STAGNANT_EXIT" && todaysAlerts[0].currentPnL > 0) {
+      console.log(`[VWAP930] Last entry today was a profitable STAGNANT_EXIT (+₹${todaysAlerts[0].currentPnL}) — no re-entry`);
       return;
     }
 

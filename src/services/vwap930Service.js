@@ -108,42 +108,6 @@ function decideDirection(ce, pe, stateCE, statePE) {
     : { direction: "PE", leg: pe, vwap: statePE.vwap };
 }
 
-// ─── Live monitor: has an ACTIVE alert's own VWAP930_CANDLE_MINUTES-minute
-// candle just CLOSED below its VWAP? If so, exit immediately — do not wait
-// for SL/Target. Returns boolean; false (never throws) on any data gap so a
-// transient API hiccup never blocks the normal SL/Target monitor.
-//
-// Cached per token for VWAP_CLOSE_CHECK_TTL_MS: the frontend polls
-// /alerts roughly once a second, and each poll calls this via
-// refreshActivePnL — without a cache that's a fresh historical-data API
-// call to the broker every second per open leg, which will trip Kite's
-// rate limits. A candle only closes every VWAP930_CANDLE_MINUTES minutes
-// anyway, so re-checking this often only ever wastes calls. ───────────────
-const vwapCloseCache = new Map(); // token -> { ts, result }
-const VWAP_CLOSE_CHECK_TTL_MS = 20_000;
-
-async function checkVwapCloseExit(alert) {
-  if (!alert?.leg?.token) return false;
-  const token = alert.leg.token;
-  const nowMs = Date.now();
-
-  const cached = vwapCloseCache.get(token);
-  if (cached && nowMs - cached.ts < VWAP_CLOSE_CHECK_TTL_MS) return cached.result;
-
-  const now  = new Date(nowMs);
-  const from = new Date(now); from.setHours(9, 15, 0, 0);
-  let result = false;
-  try {
-    const state = await getLeg3MinState(token, from, now);
-    result = !!state && state.close < state.vwap;
-  } catch {
-    // leave result false — don't cache a failure as a false negative for long
-    return false;
-  }
-  vwapCloseCache.set(token, { ts: nowMs, result });
-  return result;
-}
-
 // ─── Main scan — continuous, no fixed checkpoints ────────────────────────────
 // Called every minute by the live cron (index.js); never enters before
 // VWAP930_ENTRY_START_HOUR:VWAP930_ENTRY_START_MINUTE IST. A signal fires the
@@ -206,12 +170,9 @@ async function runVWAP930Scan(expiry) {
   };
 }
 
-// ─── Update P&L for an existing alert (VWAP-close exit / SL / TARGET /
-// 15:20 square-off / stagnant timeout) ────────────────────────────────────
-// `vwapBroken` is the result of checkVwapCloseExit() for this alert — when
-// true it wins over everything else, since "candle closed below VWAP" must
-// exit immediately without waiting for SL/Target to actually be touched.
-function updateAlertPnL(alert, currentLtp, vwapBroken = false) {
+// ─── Update P&L for an existing alert (SL / TARGET / 15:20 square-off /
+// stagnant timeout) ────────────────────────────────────────────────────────
+function updateAlertPnL(alert, currentLtp) {
   const pnl = +(currentLtp - alert.rr.entry).toFixed(2);
   const pct = +(pnl / alert.rr.entry * 100).toFixed(2);
   const peakMove = +(Math.max(alert.peakMove ?? 0, currentLtp - alert.rr.entry)).toFixed(2);
@@ -222,8 +183,7 @@ function updateAlertPnL(alert, currentLtp, vwapBroken = false) {
     const h = now.getHours(), m = now.getMinutes();
     const touch = checkPriceTouch(alert.rr, currentLtp, "target");
     const hoursOpen = alert.createdAt ? (now.getTime() - new Date(alert.createdAt).getTime()) / 3_600_000 : 0;
-    if      (vwapBroken)                    status = "VWAP_EXIT";
-    else if (touch === "SL")                status = "SL";
+    if      (touch === "SL")                status = "SL";
     else if (touch === "TARGET")            status = "TARGET";
     else if (h === 15 && m >= 20)           status = "TIME_EXIT";
     else if (hoursOpen >= VWAP930_STAGNANT_HOURS && peakMove < VWAP930_STAGNANT_MAX_POINTS)
@@ -364,11 +324,9 @@ async function runHistoricalVWAP930Scan(date, expiry) {
     return null;
   }
 
-  // Resolve one picked checkpoint's full trade outcome (VWAP-close exit /
-  // SL / Target / EOD / time-exit) by walking its candles forward — mirrors
-  // the live per-trade monitor. A VWAP-close exit (the trade's own
-  // VWAP930_CANDLE_MINUTES-minute candle closing below its VWAP) wins over
-  // SL/Target at the same step, same priority as updateAlertPnL live.
+  // Resolve one picked checkpoint's full trade outcome (SL / Target / EOD /
+  // time-exit / stagnant timeout) by walking its candles forward — mirrors
+  // the live per-trade monitor (updateAlertPnL).
   function resolveOutcome(picked) {
     const { chosen, dir, spot, ceCand, peCand, entryMark } = picked;
     const entry = chosen.premium;
@@ -377,22 +335,10 @@ async function runHistoricalVWAP930Scan(date, expiry) {
 
     const laterCandles = chosen.candles.slice(chosen.entryIdx + 1);
     let status = "ACTIVE", exitPrice = entry, exitTime = null, peakMove = 0;
-    let idx3Cursor = chosen.confirmIdx3 + 1;
-    outer:
     for (const c of laterCandles) {
       const { h: ch, m: cm } = toIST(c.date);
       const move = +(c.high - entry).toFixed(2);
       if (move > peakMove) peakMove = move;
-
-      while (idx3Cursor < chosen.candles3m.length &&
-             new Date(chosen.candles3m[idx3Cursor].date).getTime() <= new Date(c.date).getTime()) {
-        const c3 = chosen.candles3m[idx3Cursor];
-        if (c3.close < chosen.vwap3m[idx3Cursor]) {
-          status = "VWAP_EXIT"; exitPrice = c3.close; exitTime = c3.date;
-          break outer;
-        }
-        idx3Cursor++;
-      }
 
       if (c.low  <= rr.sl)     { status = "SL";        exitPrice = rr.sl;     exitTime = c.date; break; }
       if (c.high >= rr.target) { status = "TARGET";    exitPrice = rr.target; exitTime = c.date; break; }
@@ -441,15 +387,18 @@ async function runHistoricalVWAP930Scan(date, expiry) {
   }
 
   // At most VWAP930_MAX_TRADES_PER_DAY entries: keep going only while the
-  // most recent one exited with a status in VWAP930_REENTRY_STATUSES — any
-  // other outcome (EOD/TIME_EXIT), or hitting the cap, ends the day. Mirrors
-  // the live daily-limit gate in vwap930.js.
+  // most recent one exited with a status in VWAP930_REENTRY_STATUSES AND
+  // moved favorably at some point (peakMove > 0) AND, if it was a
+  // STAGNANT_EXIT, didn't close in profit (a profitable stagnant exit is a
+  // win, not a loss to retry from) — any other outcome, or hitting the cap,
+  // ends the day. Mirrors the live daily-limit gate in vwap930.js.
   const results = [];
   let picked = await attemptEntry(null);
   while (picked && results.length < VWAP930_MAX_TRADES_PER_DAY) {
     const { result, exitTimeMs } = resolveOutcome(picked);
     results.push(result);
-    if (!VWAP930_REENTRY_STATUSES.includes(result.status) || results.length >= VWAP930_MAX_TRADES_PER_DAY) break;
+    const stagnantWin = result.status === "STAGNANT_EXIT" && result.currentPnL > 0;
+    if (!VWAP930_REENTRY_STATUSES.includes(result.status) || !(result.peakMove > 0) || stagnantWin || results.length >= VWAP930_MAX_TRADES_PER_DAY) break;
     picked = await attemptEntry(exitTimeMs);
   }
 
@@ -477,5 +426,5 @@ async function runHistoricalVWAP930Scan(date, expiry) {
 
 module.exports = {
   runVWAP930Scan, runHistoricalVWAP930Scan, updateAlertPnL, buildRR,
-  checkVwapCloseExit, isAfterEntryStart, entryStartStr,
+  isAfterEntryStart, entryStartStr,
 };
